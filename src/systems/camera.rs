@@ -37,9 +37,10 @@ pub fn update_camera_follow(
             let view_offset_world = gimbal_world_rotation * view_offset_transform.translation;
 
             camera_transform.translation = infantry.translation + view_offset_world;
-            camera_transform.rotation = gimbal_world_rotation
+            camera_transform.rotation = (gimbal_world_rotation
                 * launch_offset.rotation
-                * Quat::from_euler(EulerRot::ZYX, 0.0, 0.0, PI / 2.0)
+                * Quat::from_euler(EulerRot::ZYX, 0.0, 0.0, PI / 2.0))
+            .normalize()
         }
         FollowingType::ThirdPerson => {
             let base_transform = infantry.into_inner();

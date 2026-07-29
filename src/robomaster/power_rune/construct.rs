@@ -11,7 +11,7 @@ use avian3d::prelude::CollisionEventsEnabled;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::{Children, Commands, Component, Entity, Name, On, Query, Res, With};
 use bevy::world_serialization::{WorldInstanceReady, WorldInstanceSpawner};
-use rand::{Rng, RngExt};
+use rand::RngExt;
 use std::collections::HashMap;
 
 #[derive(Component)]

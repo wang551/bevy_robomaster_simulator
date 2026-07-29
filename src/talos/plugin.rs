@@ -10,7 +10,6 @@ use crate::talos::capture::{
     publish_talos_runtime_state_system,
 };
 use bevy::ecs::system::RunSystemOnce;
-use bevy::image::BevyDefault;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -149,7 +148,7 @@ fn process_subscription(
     let expected_rotation = Quat::from_euler(EulerRot::YXZ, yaw_f32, pitch_f32, 0.0);
     let current_rotation = muzzle_offset.0.rotation();
     let delta = expected_rotation * current_rotation.inverse();
-    gimbal_transform.rotation = delta * gimbal_transform.rotation;
+    gimbal_transform.rotation = (delta * gimbal_transform.rotation).normalize();
     //info!("yaw={} pitch={}", cmd.yaw_deg, cmd.pitch_deg);
 }
 

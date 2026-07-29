@@ -118,6 +118,7 @@ impl Default for PhysicsConfig {
 #[serde(default)]
 pub struct VehicleConfig {
     pub rotation_speed: f32,
+    pub yaw_acceleration: f32,
     pub tilt_rotation_speed: f32,
     pub gimbal_rotation_speed: f32,
     pub gimbal_pitch_limit: f32,
@@ -130,6 +131,7 @@ impl Default for VehicleConfig {
     fn default() -> Self {
         Self {
             rotation_speed: 3.0,
+            yaw_acceleration: 24.0,
             tilt_rotation_speed: 3.0,
             gimbal_rotation_speed: 3.0,
             gimbal_pitch_limit: 0.785,

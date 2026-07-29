@@ -2,7 +2,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::components::{
-    Controlled, Infantry, InfantryChassis, InfantryGimbal, InfantryLaunchOffset, ProjectileCooldown,
+    Controlled, Infantry, InfantryChassis, InfantryGimbal, InfantryLaunchOffset,
 };
 
 pub fn uav_launch(
@@ -21,7 +21,7 @@ pub fn uav_launch(
     mut timer: Local<Option<Timer>>,
     keyboard: Res<ButtonInput<KeyCode>>,
 ) {
-    let mut timer = timer.get_or_insert(Timer::from_seconds(1.0, TimerMode::Once));
+    let timer = timer.get_or_insert(Timer::from_seconds(1.0, TimerMode::Once));
     timer.tick(time.delta());
     if !timer.is_finished() {
         return;

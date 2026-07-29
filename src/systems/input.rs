@@ -10,7 +10,6 @@ use crate::robomaster::vehicle::movement::VehicleDynamic;
 use crate::systems::ControllerState;
 use avian3d::prelude::*;
 
-const CHASSIS_ROTATION_RESPONSE: f32 = 40.0;
 const CHASSIS_ROTATION_STOP_EPSILON: f32 = 1e-3;
 const CHASSIS_TILT_LIMIT: f32 = 20.0 * std::f32::consts::PI / 180.0;
 
@@ -21,12 +20,17 @@ fn update_chassis_rotation(
     roll_input: f32,
     pitch_input: f32,
     yaw_rotation_speed: f32,
+    yaw_acceleration: f32,
     tilt_rotation_speed: f32,
     dt: f32,
 ) {
     let target_yaw_velocity = yaw_input * yaw_rotation_speed;
-    let response = 1.0 - (-CHASSIS_ROTATION_RESPONSE * dt).exp();
-    chassis_data.yaw_velocity += (target_yaw_velocity - chassis_data.yaw_velocity) * response;
+    let max_velocity_delta = yaw_acceleration * dt;
+    chassis_data.yaw_velocity = move_towards(
+        chassis_data.yaw_velocity,
+        target_yaw_velocity,
+        max_velocity_delta,
+    );
 
     if chassis_data.yaw_velocity.abs() < CHASSIS_ROTATION_STOP_EPSILON
         && target_yaw_velocity.abs() < CHASSIS_ROTATION_STOP_EPSILON
@@ -45,6 +49,10 @@ fn update_chassis_rotation(
         chassis_data.pitch,
         chassis_data.roll,
     );
+}
+
+fn move_towards(current: f32, target: f32, max_delta: f32) -> f32 {
+    current + (target - current).clamp(-max_delta, max_delta)
 }
 
 pub fn vehicle_controls(
@@ -90,6 +98,7 @@ pub fn vehicle_controls(
         controller.chassis_roll,
         controller.chassis_pitch,
         config.vehicle.rotation_speed,
+        config.vehicle.yaw_acceleration,
         config.vehicle.tilt_rotation_speed,
         dt,
     );
@@ -137,6 +146,7 @@ pub fn remote_vehicle_controls(
         controller.chassis_roll,
         controller.chassis_pitch,
         config.vehicle.rotation_speed,
+        config.vehicle.yaw_acceleration,
         config.vehicle.tilt_rotation_speed,
         dt,
     );
@@ -263,6 +273,7 @@ mod tests {
             0.0,
             0.0,
             9.42,
+            60.0,
             2.0,
             0.016,
         );
@@ -277,9 +288,19 @@ mod tests {
         let mut transform = Transform::default();
         let mut chassis = InfantryChassis::default();
 
-        update_chassis_rotation(&mut transform, &mut chassis, 1.0, 1.0, -1.0, 8.0, 0.25, 1.0);
+        update_chassis_rotation(
+            &mut transform,
+            &mut chassis,
+            1.0,
+            1.0,
+            -1.0,
+            8.0,
+            1.0,
+            0.25,
+            1.0,
+        );
 
-        assert!(chassis.yaw_velocity > 0.25);
+        assert_eq!(chassis.yaw_velocity, 1.0);
         assert_eq!(chassis.roll, 0.25);
         assert_eq!(chassis.pitch, -0.25);
     }
@@ -301,6 +322,7 @@ mod tests {
                 0.0,
                 0.0,
                 9.42,
+                60.0,
                 2.0,
                 0.016,
             );
@@ -314,11 +336,31 @@ mod tests {
         let mut transform = Transform::default();
         let mut chassis = InfantryChassis::default();
 
-        update_chassis_rotation(&mut transform, &mut chassis, 0.0, 1.0, -1.0, 2.0, 2.0, 10.0);
+        update_chassis_rotation(
+            &mut transform,
+            &mut chassis,
+            0.0,
+            1.0,
+            -1.0,
+            2.0,
+            60.0,
+            2.0,
+            10.0,
+        );
         assert_eq!(chassis.roll, CHASSIS_TILT_LIMIT);
         assert_eq!(chassis.pitch, -CHASSIS_TILT_LIMIT);
 
-        update_chassis_rotation(&mut transform, &mut chassis, 1.0, -1.0, 1.0, 2.0, 2.0, 10.0);
+        update_chassis_rotation(
+            &mut transform,
+            &mut chassis,
+            1.0,
+            -1.0,
+            1.0,
+            2.0,
+            60.0,
+            2.0,
+            10.0,
+        );
 
         assert_eq!(chassis.roll, -CHASSIS_TILT_LIMIT);
         assert_eq!(chassis.pitch, CHASSIS_TILT_LIMIT);
