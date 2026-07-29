@@ -3,7 +3,6 @@ mod capture;
 mod components;
 mod config;
 mod handler;
-mod metalfx;
 mod robomaster;
 mod setup;
 mod statistic;
@@ -30,7 +29,6 @@ use std::sync::atomic::AtomicBool;
 use crate::components::{CameraMode, FollowingType, ProjectileCooldown, SubscribeAutoAim};
 use crate::config::{ConfigPlugin, SimulationConfig};
 use crate::handler::{on_activate, on_hit};
-use crate::metalfx::MetalFxTemporalPlugin;
 use crate::robomaster::prelude::RoboMasterPlugins;
 use crate::setup::{setup, setup_collision, setup_dart_launch, setup_ground, setup_vehicle};
 use crate::statistic::ProjectileStatistics;
@@ -43,6 +41,7 @@ use crate::systems::{
     setup_projectile, switch_slapper_control, uav_launch, update_auto_aim_subscription,
     update_chassis_observation, update_help_text, vehicle_controls,
 };
+use bevy_metalfx::MetalFxPlugin;
 
 #[cfg(feature = "ros2")]
 use crate::ros2::plugin::ROS2Plugin;
@@ -138,7 +137,7 @@ fn main() {
     }
 
     app.add_plugins(RoboMasterPlugins)
-        .add_plugins(MetalFxTemporalPlugin)
+        .add_plugins(MetalFxPlugin)
         .add_plugins(ConfigPlugin)
         .init_resource::<CameraMode>()
         .init_resource::<ProjectileStatistics>()

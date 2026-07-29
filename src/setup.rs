@@ -12,7 +12,6 @@ use crate::components::{
     SlapperInfantry,
 };
 use crate::config::SimulationConfig;
-use crate::metalfx::MetalFxTemporalUpscaling;
 use crate::robomaster::prelude::{
     HERO_ROBOT_CONFIG, INFANTRY_THREE_CONFIG, OutpostRoot, PowerRuneRoot, ScanArmor, Team,
     TechCoreRoot,
@@ -20,6 +19,7 @@ use crate::robomaster::prelude::{
 use crate::robomaster::vehicle::movement::VehicleDynamic;
 use crate::systems::spawn_text;
 use crate::util::entity_query::HierarchyQuery;
+use bevy_metalfx::{MetalFxTemporalUpscaling, UpscaleFactor};
 
 #[derive(Component)]
 pub struct ScanOutpost;
@@ -193,9 +193,8 @@ pub fn setup(
     ));
     if cfg!(target_os = "macos") && config.render.metalfx_temporal {
         main_camera.insert(MetalFxTemporalUpscaling {
-            scale_factor: config.render.metalfx_scale,
+            factor: UpscaleFactor::clamped(config.render.metalfx_scale),
             frame_generation: config.render.metalfx_frame_generation,
-            reset: true,
         });
     } else if config.render.main_camera_fxaa {
         main_camera.insert(Fxaa::default());

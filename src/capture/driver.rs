@@ -360,6 +360,8 @@ struct ImageCopier {
     src_image: Handle<Image>,
     queue: Mutex<VecDeque<(Buffer, Vec<DynSnapshotSync>, u32, u32, TextureFormat)>>,
     free_buffers: Arc<Mutex<Vec<Buffer>>>,
+    /// Pool of frame-sized output buffers, so the per-frame conversion allocates nothing.
+    free_frames: Arc<Mutex<Vec<Vec<u8>>>>,
     snapshots: Arc<Vec<ToSyncSnapshot>>,
 }
 
@@ -374,6 +376,7 @@ impl ImageCopier {
             src_image,
             queue: Mutex::new(VecDeque::new()),
             free_buffers: Arc::new(Mutex::new(Vec::new())),
+            free_frames: Arc::new(Mutex::new(Vec::new())),
             snapshots,
         }
     }
@@ -391,53 +394,115 @@ impl ImageCopier {
     }
 }
 
-fn unpad_rows(padded: &[u8], row_bytes: usize, aligned_row_bytes: usize, height: u32) -> Vec<u8> {
-    if row_bytes == aligned_row_bytes {
-        return padded.to_vec();
-    }
-    let mut out = Vec::with_capacity(row_bytes * height as usize);
-    for row in padded.chunks(aligned_row_bytes).take(height as usize) {
-        out.extend_from_slice(&row[..row_bytes.min(row.len())]);
-    }
-    out
+/// Byte order of a 4-byte color texel as it sits in the readback buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColorOrder {
+    Rgba,
+    Bgra,
 }
 
-fn padded_rgba_to_rgb(
-    padded: &[u8],
-    width: u32,
-    height: u32,
-    format: TextureFormat,
-) -> Option<Vec<u8>> {
-    let pixel_size = format.pixel_size().ok()?;
-    if pixel_size != 4 {
-        return None;
-    }
-    let row_bytes = width as usize * pixel_size;
-    let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
+/// How mapped readback bytes become the bytes handlers receive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameEncoding {
+    /// 4-byte color texels packed down to tight RGB triples.
+    Rgb8 { source: ColorOrder },
+    /// Rows passed through verbatim, minus the row padding wgpu requires.
+    Raw,
+}
 
-    match format {
-        TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm => {
-            let mut out = Vec::with_capacity(width as usize * height as usize * 3);
-            for row in padded.chunks(aligned_row_bytes).take(height as usize) {
-                let row = &row[..row_bytes.min(row.len())];
-                for px in row.chunks_exact(4) {
-                    out.extend_from_slice(&[px[2], px[1], px[0]]);
-                }
+/// Everything needed to turn one mapped readback into a frame, resolved once per frame instead of
+/// per pixel. Constructing one is also the check that a texture format can produce the requested
+/// frame kind at all, which [`CameraCapturePlugin`] runs at startup.
+#[derive(Clone, Copy, Debug)]
+struct FrameLayout {
+    encoding: FrameEncoding,
+    /// Meaningful bytes per source row, ignoring copy alignment padding.
+    row_bytes: usize,
+    padded_row_bytes: usize,
+    output_row_bytes: usize,
+    height: u32,
+}
+
+impl FrameLayout {
+    fn new(
+        kind: CapturedFrameKind,
+        format: TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
+        let pixel_size = format.pixel_size().ok()?;
+        let row_bytes = width as usize * pixel_size;
+        let padded_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
+
+        let (encoding, output_row_bytes) = match kind {
+            CapturedFrameKind::Rgb8 => {
+                let source = match format {
+                    TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => ColorOrder::Rgba,
+                    TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm => ColorOrder::Bgra,
+                    _ => return None,
+                };
+                (FrameEncoding::Rgb8 { source }, width as usize * 3)
             }
-            Some(out)
-        }
-        TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => {
-            let mut out = Vec::with_capacity(width as usize * height as usize * 3);
-            for row in padded.chunks(aligned_row_bytes).take(height as usize) {
-                let row = &row[..row_bytes.min(row.len())];
-                for px in row.chunks_exact(4) {
-                    out.extend_from_slice(&[px[0], px[1], px[2]]);
-                }
+            CapturedFrameKind::Depth32F | CapturedFrameKind::R32Uint => {
+                (FrameEncoding::Raw, row_bytes)
             }
-            Some(out)
-        }
-        _ => None,
+        };
+
+        Some(Self {
+            encoding,
+            row_bytes,
+            padded_row_bytes,
+            output_row_bytes,
+            height,
+        })
     }
+
+    fn output_len(&self) -> usize {
+        self.output_row_bytes * self.height as usize
+    }
+
+    /// Writes straight from the mapped range into `out`, which must be [`Self::output_len`] long.
+    /// The encoding is matched per row, never per pixel.
+    fn write(&self, mapped: &[u8], out: &mut [u8]) {
+        let rows = mapped
+            .chunks(self.padded_row_bytes)
+            .take(self.height as usize);
+
+        for (row, out_row) in rows.zip(out.chunks_exact_mut(self.output_row_bytes)) {
+            let row = &row[..self.row_bytes.min(row.len())];
+            match self.encoding {
+                FrameEncoding::Raw => {
+                    let len = row.len().min(out_row.len());
+                    out_row[..len].copy_from_slice(&row[..len]);
+                }
+                FrameEncoding::Rgb8 {
+                    source: ColorOrder::Rgba,
+                } => {
+                    for (texel, pixel) in row.chunks_exact(4).zip(out_row.chunks_exact_mut(3)) {
+                        pixel.copy_from_slice(&texel[..3]);
+                    }
+                }
+                FrameEncoding::Rgb8 {
+                    source: ColorOrder::Bgra,
+                } => {
+                    for (texel, pixel) in row.chunks_exact(4).zip(out_row.chunks_exact_mut(3)) {
+                        pixel.copy_from_slice(&[texel[2], texel[1], texel[0]]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Takes a pooled output buffer, sized without ever re-zeroing a buffer that already fits.
+fn acquire_frame_buffer(pool: &Mutex<Vec<Vec<u8>>>, len: usize) -> Vec<u8> {
+    let mut buffer = pool.lock().unwrap().pop().unwrap_or_default();
+    if buffer.len() < len {
+        buffer.resize(len, 0);
+    } else {
+        buffer.truncate(len);
+    }
+    buffer
 }
 
 fn capture_texture_aspect(format: TextureFormat) -> TextureAspect {
@@ -591,28 +656,32 @@ fn receive_image_from_buffer(mut world: DeferredWorld) {
                         height,
                         texture_format,
                         copier.free_buffers.clone(),
+                        copier.free_frames.clone(),
                         copier.config.clone(),
                     )
                 })
         };
 
-        let Some((buffer, snapshots, width, height, texture_format, free_buffers, config)) = next
+        let Some((
+            buffer,
+            snapshots,
+            width,
+            height,
+            texture_format,
+            free_buffers,
+            free_frames,
+            config,
+        )) = next
         else {
             continue;
         };
 
+        // The callback only signals completion; the conversion happens on the async pool, reading
+        // the mapped range in place. That keeps the heavy work off the polling thread without the
+        // full-frame copy an intermediate `Vec` would cost.
         let (s, r) = futures::channel::oneshot::channel();
-        let buffer_slice = buffer.slice(..);
-        let buffer_for_map = buffer.clone();
-        buffer_slice.map_async(MapMode::Read, move |res| {
-            res.expect("Failed to map buffer");
-            let buffer_slice = buffer_for_map.slice(..);
-            let data = buffer_slice.get_mapped_range();
-            let dat = data.to_vec();
-            drop(data);
-            buffer_for_map.unmap();
-            free_buffers.lock().unwrap().push(buffer_for_map);
-            s.send(dat).expect("Failed to send map update");
+        buffer.slice(..).map_async(MapMode::Read, move |result| {
+            let _ = s.send(result);
         });
 
         let snapshots: Vec<(Option<CaptureFrameId>, Box<dyn SnapshotAsync>)> = snapshots
@@ -626,47 +695,20 @@ fn receive_image_from_buffer(mut world: DeferredWorld) {
 
         AsyncComputeTaskPool::get()
             .spawn(async move {
-                let padded = r.await.expect("Failed to receive the map_async message");
-                let frame_bytes = match frame_kind {
-                    CapturedFrameKind::Rgb8 => {
-                        padded_rgba_to_rgb(&padded, width, height, texture_format).unwrap_or_else(
-                            || {
-                                let pixel_size = texture_format
-                                    .pixel_size()
-                                    .expect("Unsupported capture texture format");
-                                let row_bytes = width as usize * pixel_size;
-                                let aligned_row_bytes =
-                                    RenderDevice::align_copy_bytes_per_row(row_bytes);
-                                let unpadded =
-                                    unpad_rows(&padded, row_bytes, aligned_row_bytes, height);
-                                let mut bevy_image = Image::new_target_texture(
-                                    width,
-                                    height,
-                                    texture_format,
-                                    Some(texture_format),
-                                );
-                                bevy_image.data = Some(unpadded);
-                                bevy_image.try_into_dynamic().unwrap().to_rgb8().into_raw()
-                            },
-                        )
-                    }
-                    CapturedFrameKind::Depth32F => {
-                        let pixel_size = texture_format
-                            .pixel_size()
-                            .expect("Unsupported depth capture texture format");
-                        let row_bytes = width as usize * pixel_size;
-                        let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
-                        unpad_rows(&padded, row_bytes, aligned_row_bytes, height)
-                    }
-                    CapturedFrameKind::R32Uint => {
-                        let pixel_size = texture_format
-                            .pixel_size()
-                            .expect("Unsupported visibility-mask texture format");
-                        let row_bytes = width as usize * pixel_size;
-                        let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
-                        unpad_rows(&padded, row_bytes, aligned_row_bytes, height)
-                    }
-                };
+                r.await
+                    .expect("capture buffer map channel dropped")
+                    .expect("Failed to map buffer");
+
+                let layout = FrameLayout::new(frame_kind, texture_format, width, height)
+                    .expect("Unsupported capture texture format");
+                let mut frame_bytes = acquire_frame_buffer(&free_frames, layout.output_len());
+
+                {
+                    let mapped = buffer.slice(..).get_mapped_range();
+                    layout.write(&mapped, &mut frame_bytes);
+                }
+                buffer.unmap();
+                free_buffers.lock().unwrap().push(buffer);
 
                 for (frame_id, mut snapshot) in snapshots {
                     snapshot.captured(CapturedFrame {
@@ -677,6 +719,8 @@ fn receive_image_from_buffer(mut world: DeferredWorld) {
                         data: frame_bytes.as_slice(),
                     });
                 }
+
+                free_frames.lock().unwrap().push(frame_bytes);
             })
             .detach();
     }
@@ -735,6 +779,19 @@ impl Plugin for CameraCapturePlugin {
     }
 
     fn build(&self, app: &mut App) {
+        assert!(
+            FrameLayout::new(
+                self.config.frame_kind,
+                self.config.texture_format,
+                self.config.width,
+                self.config.height,
+            )
+            .is_some(),
+            "capture texture format {:?} cannot produce {:?} frames",
+            self.config.texture_format,
+            self.config.frame_kind,
+        );
+
         if self.expose_config_resource {
             app.insert_resource(self.config.clone());
         }
@@ -785,6 +842,66 @@ impl Plugin for CameraCapturePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rgb8_layout_drops_row_padding_and_alpha() {
+        // 2x2 BGRA, rows padded out to wgpu's copy alignment.
+        let layout =
+            FrameLayout::new(CapturedFrameKind::Rgb8, TextureFormat::Bgra8UnormSrgb, 2, 2).unwrap();
+        assert_eq!(layout.output_len(), 2 * 2 * 3);
+
+        let mut mapped = vec![0u8; layout.padded_row_bytes * 2];
+        mapped[..8].copy_from_slice(&[1, 2, 3, 255, 4, 5, 6, 255]);
+        mapped[layout.padded_row_bytes..][..8].copy_from_slice(&[7, 8, 9, 255, 10, 11, 12, 255]);
+
+        let mut out = vec![0u8; layout.output_len()];
+        layout.write(&mapped, &mut out);
+
+        assert_eq!(out, vec![3, 2, 1, 6, 5, 4, 9, 8, 7, 12, 11, 10]);
+    }
+
+    #[test]
+    fn rgb8_layout_rejects_formats_it_cannot_pack() {
+        assert!(
+            FrameLayout::new(CapturedFrameKind::Rgb8, TextureFormat::Rgba16Float, 4, 4).is_none()
+        );
+    }
+
+    #[test]
+    fn raw_layout_passes_rows_through() {
+        let layout = FrameLayout::new(
+            CapturedFrameKind::Depth32F,
+            TextureFormat::Depth32Float,
+            2,
+            2,
+        )
+        .unwrap();
+        assert_eq!(layout.output_len(), 2 * 2 * 4);
+
+        let mut mapped = vec![0u8; layout.padded_row_bytes * 2];
+        mapped[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        mapped[layout.padded_row_bytes..][..8].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+
+        let mut out = vec![0u8; layout.output_len()];
+        layout.write(&mapped, &mut out);
+
+        assert_eq!(out, (1..=16).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn frame_buffer_pool_reuses_allocations() {
+        let pool = Mutex::new(Vec::new());
+
+        let buffer = acquire_frame_buffer(&pool, 64);
+        assert_eq!(buffer.len(), 64);
+        let capacity = buffer.capacity();
+        pool.lock().unwrap().push(buffer);
+
+        let reused = acquire_frame_buffer(&pool, 64);
+        assert_eq!(reused.len(), 64);
+        assert_eq!(reused.capacity(), capacity);
+        assert!(pool.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn capture_submission_accepts_all_channels_in_any_order() {

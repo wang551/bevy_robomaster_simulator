@@ -92,7 +92,7 @@ impl Default for RenderConfig {
             shadows: false,
             main_camera_fxaa: false,
             metalfx_temporal: cfg!(target_os = "macos"),
-            metalfx_frame_generation: cfg!(target_os = "macos"),
+            metalfx_frame_generation: false,
             metalfx_scale: 2.0,
         }
     }

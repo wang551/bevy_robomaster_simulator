@@ -1488,6 +1488,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_metalfx"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "objc2 0.6.4",
+ "objc2-metal 0.3.2",
+ "objc2-metal-fx",
+ "wgpu",
+]
+
+[[package]]
 name = "bevy_mikktspace"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2907,6 +2918,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "bevy-inspector-egui",
+ "bevy_metalfx",
  "clap",
  "crossbeam-channel",
  "egui",
@@ -2915,16 +2927,12 @@ dependencies = [
  "futures",
  "image",
  "notify",
- "objc2 0.6.4",
- "objc2-metal 0.3.2",
- "objc2-metal-fx",
  "r2r",
  "rand 0.10.1",
  "serde",
  "serde_json",
  "talos-ipc",
  "toml",
- "wgpu",
 ]
 
 [[package]]

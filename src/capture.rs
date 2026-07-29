@@ -8,7 +8,7 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 
 use crate::config::SimulationConfig;
-use crate::metalfx::MetalFxTemporalUpscaling;
+use bevy_metalfx::{MetalFxTemporalUpscaling, UpscaleFactor};
 
 pub use driver::CaptureBundle;
 
@@ -41,9 +41,8 @@ pub fn setup_capture_camera(world: &mut World) {
         .get_resource::<SimulationConfig>()
         .filter(|config| cfg!(target_os = "macos") && config.render.metalfx_temporal)
         .map(|config| MetalFxTemporalUpscaling {
-            scale_factor: config.render.metalfx_scale,
+            factor: UpscaleFactor::clamped(config.render.metalfx_scale),
             frame_generation: config.render.metalfx_frame_generation,
-            reset: true,
         });
 
     let mut capture_camera = world.spawn((
