@@ -9,8 +9,8 @@ use crate::util::bevy::{drain_entities_by, insert_all_child};
 use crate::{material, visibility};
 use avian3d::prelude::CollisionEventsEnabled;
 use bevy::ecs::system::SystemParam;
-use bevy::prelude::{Children, Commands, Component, Entity, Name, On, Query, Res, With};
-use bevy::world_serialization::{WorldInstanceReady, WorldInstanceSpawner};
+use bevy::prelude::{Children, Commands, Component, Entity, In, Name, Query, Res, With};
+use bevy::world_serialization::{InstanceId, WorldInstanceSpawner};
 use rand::RngExt;
 use std::collections::HashMap;
 
@@ -97,7 +97,7 @@ fn build_targets(
 }
 
 #[derive(SystemParam)]
-struct PowerRuneParam<'w, 's> {
+pub(crate) struct PowerRuneParam<'w, 's> {
     commands: Commands<'w, 's>,
     scene_spawner: Res<'w, WorldInstanceSpawner>,
 
@@ -106,19 +106,15 @@ struct PowerRuneParam<'w, 's> {
     children: Query<'w, 's, &'static Children>,
 }
 
-fn setup_power_rune(
-    events: On<WorldInstanceReady>,
+pub(crate) fn setup_power_rune(
+    In((_root, instance)): In<(Entity, InstanceId)>,
     mut param: PowerRuneParam,
     mut creator: StatefulAppearanceCreator,
 ) {
-    if !param.power_query.contains(events.entity) {
-        return;
-    }
-
     let names = param.names;
     let mut name_map = param
         .scene_spawner
-        .iter_instance_entities(events.instance_id)
+        .iter_instance_entities(instance)
         .filter_map(|entity| names.get(entity).map(|n| (n.as_str(), entity)).ok())
         .fold(HashMap::new(), |mut m, (name, entity)| {
             m.insert(name, entity);
@@ -193,7 +189,7 @@ fn setup_power_rune(
 pub(super) struct PowerRuneConstructorPlugin;
 
 impl bevy::app::Plugin for PowerRuneConstructorPlugin {
-    fn build(&self, app: &mut bevy::app::App) {
-        app.add_observer(setup_power_rune);
+    fn build(&self, _app: &mut bevy::app::App) {
+        // `setup_power_rune` is invoked by the scene load sequence, not by an event.
     }
 }

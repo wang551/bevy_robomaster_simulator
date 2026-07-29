@@ -4,6 +4,7 @@ mod components;
 mod config;
 mod handler;
 mod robomaster;
+mod scene;
 mod setup;
 mod statistic;
 mod systems;
@@ -30,7 +31,7 @@ use crate::components::{CameraMode, FollowingType, ProjectileCooldown, Subscribe
 use crate::config::{ConfigPlugin, SimulationConfig};
 use crate::handler::{on_activate, on_hit};
 use crate::robomaster::prelude::RoboMasterPlugins;
-use crate::setup::{setup, setup_collision, setup_dart_launch, setup_ground, setup_vehicle};
+use crate::setup::setup;
 use crate::statistic::ProjectileStatistics;
 use crate::systems::{
     ChassisObservationFrame, ControllerState, GameplaySystems, PreviousKinematicState,
@@ -138,6 +139,7 @@ fn main() {
 
     app.add_plugins(RoboMasterPlugins)
         .add_plugins(MetalFxPlugin)
+        .add_plugins(crate::scene::ScenePlugin)
         .add_plugins(ConfigPlugin)
         .init_resource::<CameraMode>()
         .init_resource::<ProjectileStatistics>()
@@ -154,10 +156,6 @@ fn main() {
             TimerMode::Once,
         )))
         .add_systems(Startup, (setup, setup_projectile))
-        .add_observer(setup_ground)
-        .add_observer(setup_dart_launch)
-        .add_observer(setup_vehicle)
-        .add_observer(setup_collision)
         .add_observer(on_hit)
         .add_observer(on_activate)
         .configure_sets(

@@ -1,6 +1,6 @@
 mod collision;
 mod common;
-mod construct;
+pub mod construct;
 mod consts;
 pub mod prelude;
 mod rotation;

@@ -1,3 +1,4 @@
+pub mod async_world;
 pub mod bevy;
 pub mod derive;
 pub mod either;

@@ -7,10 +7,10 @@ use bevy::color::LinearRgba;
 use bevy::ecs::system::Local;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::{
-    Assets, ButtonInput, Children, Color, Commands, Component, Entity, Handle, KeyCode, Name, On,
-    Plugin, Query, Res, ResMut, Time, With, info, warn,
+    Assets, ButtonInput, Children, Color, Commands, Component, Entity, Handle, In, KeyCode, Name,
+    Plugin, Query, Res, ResMut, Time, info, warn,
 };
-use bevy::world_serialization::{WorldInstanceReady, WorldInstanceSpawner};
+use bevy::world_serialization::{InstanceId, WorldInstanceSpawner};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -1013,19 +1013,14 @@ fn warn_incomplete_first_light_set(prefix: &str, lights: &FirstLightSet) {
     warn!("TECH_CORE.glb has incomplete {prefix} segments; missing {preview}{suffix}");
 }
 
-fn setup_tech_core(
-    events: On<WorldInstanceReady>,
+pub(crate) fn setup_tech_core(
+    In((root, instance)): In<(Entity, InstanceId)>,
     mut commands: Commands,
     scene_spawner: Res<WorldInstanceSpawner>,
-    roots: Query<(), With<TechCoreRoot>>,
     names: Query<&Name>,
 ) {
-    if !roots.contains(events.entity) {
-        return;
-    }
-
     let name_map = scene_spawner
-        .iter_instance_entities(events.instance_id)
+        .iter_instance_entities(instance)
         .filter_map(|entity| {
             names
                 .get(entity)
@@ -1044,9 +1039,7 @@ fn setup_tech_core(
     warn_incomplete_first_light_set(RED_LIGHT_NAMES[0], &red.first);
     warn_incomplete_first_light_set(BLUE_LIGHT_NAMES[0], &blue.first);
 
-    commands
-        .entity(events.entity)
-        .insert(TechCore::new(red, blue));
+    commands.entity(root).insert(TechCore::new(red, blue));
     info!("Tech core lights bound");
 }
 
@@ -1130,7 +1123,8 @@ pub(super) struct TechCorePlugin;
 
 impl Plugin for TechCorePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(setup_tech_core).add_systems(
+        // `setup_tech_core` is invoked by the scene load sequence, not by an event.
+        app.add_systems(
             Update,
             (debug_cycle_tech_core_phase, update_tech_core_lights),
         );

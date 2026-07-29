@@ -2,20 +2,14 @@ use avian3d::prelude::*;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
-use bevy::world_serialization::{WorldInstance, WorldInstanceReady};
 use bevy_inspector_egui::bevy_egui::{EguiGlobalSettings, PrimaryEguiContext};
-use std::collections::HashMap;
 
 use crate::components::{
-    ActiveSlapper, Controlled, DartLaunch, GameLayer, GroundRoot, Infantry, InfantryChassis,
-    InfantryGimbal, InfantryLaunchOffset, InfantryViewOffset, MainCamera, PreciousCollision,
-    SlapperInfantry,
+    ActiveSlapper, Controlled, DartLaunch, GameLayer, Infantry, InfantryChassis, InfantryGimbal,
+    InfantryLaunchOffset, InfantryViewOffset, MainCamera, PreciousCollision, SlapperInfantry,
 };
 use crate::config::SimulationConfig;
-use crate::robomaster::prelude::{
-    HERO_ROBOT_CONFIG, INFANTRY_THREE_CONFIG, OutpostRoot, PowerRuneRoot, ScanArmor, Team,
-    TechCoreRoot,
-};
+use crate::robomaster::prelude::{OutpostRoot, ScanArmor, Team};
 use crate::robomaster::vehicle::movement::VehicleDynamic;
 use crate::systems::spawn_text;
 use crate::util::entity_query::HierarchyQuery;
@@ -26,7 +20,6 @@ pub struct ScanOutpost;
 
 pub fn setup(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     config: Res<SimulationConfig>,
     egui_global_settings: Option<ResMut<EguiGlobalSettings>>,
 ) {
@@ -45,126 +38,7 @@ pub fn setup(
         Transform::from_xyz(0.0, 4.0, 0.0).looking_at(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0)),
     ));
 
-    let layer_env = GameLayer::environment_collision_layers();
-
-    let trimesh = || {
-        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMeshWithConfig(
-            TrimeshFlags::all(),
-        ))
-        .with_default_layers(layer_env)
-    };
-    let voxel = |size| {
-        ColliderConstructorHierarchy::new(ColliderConstructor::VoxelizedTrimeshFromMesh {
-            voxel_size: size,
-            fill_mode: FillMode::FloodFill {
-                detect_cavities: true,
-            },
-        })
-        .with_default_layers(layer_env)
-    };
-
-    commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("GROUND.glb"))),
-        Transform::IDENTITY,
-        GroundRoot,
-        Friction::new(0.5),
-        PreciousCollision(HashMap::from([(
-            "GROUND_DENSE".to_string(),
-            (
-                trimesh(),
-                layer_env,
-                Visibility::Visible,
-                Some(RigidBody::Static),
-            ),
-        )])),
-    ));
-
-    commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("CALIB.glb"))),
-        Transform::IDENTITY
-            .with_scale(Vec3::splat(1.0))
-            .with_translation(Vec3::new(1.0, 2.5, 1.0)),
-    ));
-
-    commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("CALIB.glb"))),
-        Transform::IDENTITY
-            .with_scale(Vec3::splat(1.0))
-            .with_translation(Vec3::new(2.0, 0.5, 2.0)),
-    ));
-
-    commands.spawn((
-        RigidBody::Static,
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("OUTPOST.glb"))),
-        Transform::IDENTITY,
-        ScanOutpost,
-    ));
-
-    commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("TECH_CORE.glb"))),
-        Transform::IDENTITY,
-        TechCoreRoot,
-        PreciousCollision(HashMap::from([(
-            "GROUND".to_string(),
-            (
-                trimesh(),
-                layer_env,
-                Visibility::Visible,
-                Some(RigidBody::Static),
-            ),
-        )])),
-    ));
-
-    let mut power_rune_col = HashMap::from([(
-        "BASE".to_string(),
-        (
-            trimesh(),
-            layer_env,
-            Visibility::Visible,
-            Some(RigidBody::Static),
-        ),
-    )]);
-    for i in 1..=2 {
-        for j in 1..=5 {
-            for k in ["ACTIVATED", "ACTIVE", "COMPLETED", "DISABLED"] {
-                power_rune_col.insert(
-                    format!("FACE_{}_TARGET_{}_{}", i, j, k).to_string(),
-                    (voxel(0.015), layer_env, Visibility::Visible, None),
-                );
-            }
-        }
-    }
-    commands.spawn((
-        RigidBody::Static,
-        CollisionMargin(0.001),
-        Restitution::ZERO,
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("POWER.glb"))),
-        Transform::IDENTITY,
-        PowerRuneRoot,
-        PreciousCollision(power_rune_col),
-    ));
-
-    commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("vehicle.glb"))),
-        Transform::from_xyz(0.0, 1.0, 0.0),
-        Infantry::new(Team::Red, INFANTRY_THREE_CONFIG),
-        Controlled,
-    ));
-
-    commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("vehicle.glb"))),
-        Transform::from_xyz(1.0, 1.0, 1.0),
-        Infantry::new(Team::Blue, INFANTRY_THREE_CONFIG),
-        SlapperInfantry,
-    ));
-
-    commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("HERO.glb"))),
-        Transform::from_xyz(2.0, 1.0, 1.0),
-        Infantry::new(Team::Blue, HERO_ROBOT_CONFIG),
-        SlapperInfantry,
-        ActiveSlapper,
-    ));
+    // Scene assets are spawned in load order by `ScenePlugin`, not here.
 
     let mut main_camera = commands.spawn((
         Camera3d::default(),
@@ -206,17 +80,13 @@ pub fn setup(
     main_camera.insert(crate::capture::CaptureSource);
 }
 
-pub fn setup_ground(
-    events: On<WorldInstanceReady>,
+/// Tags the two outposts inside `OUTPOST.glb`.
+pub fn setup_outposts(
+    In(root): In<Entity>,
     mut commands: Commands,
     children: Query<&Children>,
     name: Query<&Name>,
-    ground: Single<Entity, With<ScanOutpost>>,
 ) {
-    let root = events.entity;
-    if ground.into_inner() != root {
-        return;
-    }
     children.iter_descendants(root).for_each(|e| {
         let Ok(name) = name.get(e) else {
             return;
@@ -230,18 +100,14 @@ pub fn setup_ground(
     })
 }
 
+/// Finds the dart launch marker inside `GROUND.glb`.
 pub fn setup_dart_launch(
-    events: On<WorldInstanceReady>,
+    In(root): In<Entity>,
     mut commands: Commands,
     children: Query<&Children>,
     name: Query<&Name>,
-    ground: Query<(), With<GroundRoot>>,
 ) {
-    if ground.get(events.entity).is_err() {
-        return;
-    }
-
-    for entity in children.iter_descendants(events.entity) {
+    for entity in children.iter_descendants(root) {
         let Ok(name) = name.get(entity) else {
             continue;
         };
@@ -254,8 +120,9 @@ pub fn setup_dart_launch(
     warn!("GROUND.glb is missing DART_LAUNCH_DIRECTION");
 }
 
+/// Turns a loaded robot world into a driveable vehicle: body, armor layers, chassis and gimbal.
 pub fn setup_vehicle(
-    events: On<WorldInstanceReady>,
+    In(root): In<Entity>,
     mut commands: Commands,
     query: HierarchyQuery,
     root_query: Query<(
@@ -264,15 +131,11 @@ pub fn setup_vehicle(
         Option<&Controlled>,
         Option<&ActiveSlapper>,
     )>,
-    _secondary_query: Query<&ChildOf, (Without<Infantry>, Without<WorldInstance>)>,
-    _node_query: Query<(&Name, &ChildOf), (Without<Infantry>, Without<WorldInstance>)>,
     sim_config: Res<SimulationConfig>,
 ) {
-    let root = events.entity;
-    if root_query.get(root).is_err() {
-        return;
-    }
-    let (root, infantry, is_local, is_active) = root_query.get(root).unwrap();
+    let (root, infantry, is_local, is_active) = root_query
+        .get(root)
+        .expect("setup_vehicle called on an entity that is not an Infantry root");
     let team = infantry.team;
     let config = infantry.config;
     let is_local = is_local.is_some();
@@ -334,32 +197,32 @@ pub fn setup_vehicle(
     }
 }
 
+/// Queues Avian collider construction for the named nodes of a loaded world.
+///
+/// The map is passed in rather than parked on the entity as a component: it is an instruction for
+/// one moment in the load, not state the world should keep.
 pub fn setup_collision(
-    events: On<WorldInstanceReady>,
+    In((root, map)): In<(Entity, PreciousCollision)>,
     mut commands: Commands,
     children: Query<&Children>,
     name: Query<&Name, With<Children>>,
-    root_query: Query<(Entity, &PreciousCollision)>,
 ) {
-    let Ok((_, PreciousCollision(map))) = root_query.get(events.entity) else {
-        return;
-    };
-    for e in children.iter_descendants(events.entity) {
+    for e in children.iter_descendants(root) {
         let Ok(name) = name.get(e) else {
             continue;
         };
-        if let Some((constructor, layer, visibility, rigid)) = map.get(&name.to_string()) {
-            if let Some(rigid) = rigid {
-                commands
-                    .entity(e)
-                    .insert((*rigid, constructor.clone(), *layer));
-            } else {
-                commands.entity(e).insert((constructor.clone(), *layer));
-            }
-            if visibility == &Visibility::Hidden {
-                commands.entity(e).insert(*visibility);
-            }
+        let Some((constructor, layer, visibility, rigid)) = map.get(name.as_str()) else {
+            continue;
+        };
+        if let Some(rigid) = rigid {
+            commands
+                .entity(e)
+                .insert((*rigid, constructor.clone(), *layer));
+        } else {
+            commands.entity(e).insert((constructor.clone(), *layer));
+        }
+        if visibility == &Visibility::Hidden {
+            commands.entity(e).insert(*visibility);
         }
     }
-    commands.entity(events.entity).remove::<PreciousCollision>();
 }

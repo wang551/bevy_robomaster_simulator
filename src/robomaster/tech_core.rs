@@ -1,3 +1,3 @@
-mod construct;
+pub mod construct;
 mod consts;
 pub mod prelude;
