@@ -64,6 +64,22 @@ max_speed = 6.0                 # m/s - maximum vehicle speed
 linear_acceleration = 6.0       # m/s^2 - linear acceleration
 acceleration_exponent = 2.5    # exponent for non-linear acceleration curve
 
+# Closed-loop tracking of external auto-aim (Talos/ROS2) gimbal commands.
+# Yaw and pitch are independent loops with independent gains.
+[vehicle.gimbal_pid.yaw]
+kp = 50.0
+ki = 0.0
+kd = 0.1
+integral_limit = 0.5            # rad*s - anti-windup bound on the integral term
+max_rate = 100.0                # rad/s - saturation of the commanded yaw rate
+
+[vehicle.gimbal_pid.pitch]
+kp = 50.0
+ki = 0.0
+kd = 0.1
+integral_limit = 0.5            # rad*s - anti-windup bound on the integral term
+max_rate = 100.0                # rad/s - saturation of the commanded pitch rate
+
 [mecanum]
 wheel_radius_m = 0.076          # wheel radius (m)
 half_wheelbase_m = 0.18         # half of front-rear wheel spacing (m)

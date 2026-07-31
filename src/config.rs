@@ -125,6 +125,8 @@ pub struct VehicleConfig {
     pub max_speed: f32,
     pub linear_acceleration: f32,
     pub acceleration_exponent: f32,
+    #[serde(default)]
+    pub gimbal_pid: GimbalPidConfig,
 }
 
 impl Default for VehicleConfig {
@@ -138,6 +140,61 @@ impl Default for VehicleConfig {
             max_speed: 4.0,
             linear_acceleration: 8.0,
             acceleration_exponent: 10.0,
+            gimbal_pid: GimbalPidConfig::default(),
+        }
+    }
+}
+
+/// Gains for the closed-loop gimbal tracking used by every remote/auto-aim command.
+/// The two axes carry different inertia and travel limits, so they are tuned apart.
+#[derive(Deserialize, Reflect, Clone)]
+#[serde(default)]
+pub struct GimbalPidConfig {
+    pub yaw: GimbalAxisPidConfig,
+    pub pitch: GimbalAxisPidConfig,
+}
+
+impl Default for GimbalPidConfig {
+    fn default() -> Self {
+        Self {
+            yaw: GimbalAxisPidConfig {
+                kp: 12.0,
+                ki: 0.5,
+                kd: 0.35,
+                integral_limit: 0.5,
+                max_rate: 20.0,
+            },
+            pitch: GimbalAxisPidConfig {
+                kp: 10.0,
+                ki: 0.5,
+                kd: 0.3,
+                integral_limit: 0.5,
+                max_rate: 12.0,
+            },
+        }
+    }
+}
+
+#[derive(Deserialize, Reflect, Clone)]
+#[serde(default)]
+pub struct GimbalAxisPidConfig {
+    pub kp: f32,
+    pub ki: f32,
+    pub kd: f32,
+    /// Bound on the accumulated error term (rad·s), guards against windup.
+    pub integral_limit: f32,
+    /// Saturation of the commanded angular rate for this axis (rad/s).
+    pub max_rate: f32,
+}
+
+impl Default for GimbalAxisPidConfig {
+    fn default() -> Self {
+        Self {
+            kp: 12.0,
+            ki: 0.5,
+            kd: 0.35,
+            integral_limit: 0.5,
+            max_rate: 20.0,
         }
     }
 }
