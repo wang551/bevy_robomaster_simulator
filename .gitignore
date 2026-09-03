@@ -1,14 +1,54 @@
+# =====================================================
+# 白名单模式：默认忽略所有文件，仅放行下方列出的内容
+# 新增文件类型 / 顶层无扩展名文件时，记得同步更新白名单
+# =====================================================
+
+# 默认忽略一切
+*
+
+# 放行目录本身（否则 git 不会进入目录去匹配文件规则）
+!*/
+
+# ---------- 文件白名单 ----------
+!/.gitignore
+!*.rs
+!*.toml
+!*.msg
+!*.srv
+!*.glb
+!*.ogg
+!*.png
+!*.md
+!*.lock
+!*.xml
+!*.txt
+!*.sh
+!*.ps1
+!*.json
+!*.h
+!/LICENSE
+!/.githooks/*
+
+# ---------- 显式排除（覆盖上方放行） ----------
+# 构建产物 / 生成目录 / 工具状态
 /target
-*.stp
-.DS_Store
-assets_old
-assets/*.blend
-assets/*.blend1
-.idea
-screenshot-*.png
 /dataset/
 /install/
 /log/
 /build/
+.mimosa/
+assets_old
+.idea
+
+# 3D 源文件 / 系统文件
+*.stp
+.DS_Store
+assets/*.blend
+assets/*.blend1
+
+# 截图（demo.png 保留）
+screenshot-*.png
+
+# 用户本地脚本（cargo-wrapper.sh 保留）
 build.sh
 env.sh
