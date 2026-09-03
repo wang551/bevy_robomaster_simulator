@@ -20,6 +20,8 @@ pub struct SimulationConfig {
     pub capture: CapturePipelineConfig,
     #[serde(default)]
     pub livox_ros: LivoxRosConfig,
+    #[serde(default)]
+    pub ros2: RosPublishConfig,
     pub physics: PhysicsConfig,
     pub vehicle: VehicleConfig,
     #[serde(default)]
@@ -340,6 +342,33 @@ impl Default for LivoxRosConfig {
     }
 }
 
+#[derive(Deserialize, Reflect, Clone)]
+#[serde(default)]
+pub struct RosPublishConfig {
+    /// Rate limit for /image_raw (and /image_raw/compressed) publishing in Hz.
+    /// 0 disables the limit (publish every captured frame).
+    ///
+    /// At 1440x1080 RGB each frame is ~4.7MB serialized; at 110+FPS that is
+    /// ~500MB/s of offered load. A subscriber on a link slower than that
+    /// (WiFi, remote LAN) cannot drain it and the rmw/DDS layer accumulates
+    /// unsent samples inside this process until it OOMs. Cap the rate to what
+    /// your consumers and network can actually sustain.
+    pub publish_hz: f32,
+    /// Publish JPEG-compressed /image_raw/compressed instead of /image_raw.
+    /// Reduces bandwidth to ~20-40MB/s, which remote/WiFi consumers can keep
+    /// up with. Consumers must subscribe to /image_raw/compressed instead.
+    pub publish_compressed: bool,
+}
+
+impl Default for RosPublishConfig {
+    fn default() -> Self {
+        Self {
+            publish_hz: 60.0,
+            publish_compressed: false,
+        }
+    }
+}
+
 impl SimulationConfig {
     pub fn load() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let content = std::fs::read_to_string("config.toml")?;
@@ -358,6 +387,7 @@ impl Default for SimulationConfig {
                 render: RenderConfig::default(),
                 capture: CapturePipelineConfig::default(),
                 livox_ros: LivoxRosConfig::default(),
+                ros2: RosPublishConfig::default(),
                 physics: PhysicsConfig::default(),
                 vehicle: VehicleConfig::default(),
                 mecanum: MecanumConfig::default(),

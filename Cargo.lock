@@ -2152,7 +2152,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2172,7 +2172,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "regex",
@@ -4179,15 +4179,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -5783,9 +5774,8 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "r2r"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b36b61a6252e8e7a24919b9877dacf1dc9f0ac4c2d0eba91c68b35c1b2283ed2"
+version = "0.9.6"
+source = "git+https://github.com/sequenceplanner/r2r?tag=0.9.6#2d080c4dede3ec950620d2b82f6521bc4fa1e690"
 dependencies = [
  "force-send-sync",
  "futures",
@@ -5811,9 +5801,8 @@ dependencies = [
 
 [[package]]
 name = "r2r_actions"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca8488195951aaadef421b470c823cd095848bebf2004ff96ef5d351067eac1"
+version = "0.9.6"
+source = "git+https://github.com/sequenceplanner/r2r?tag=0.9.6#2d080c4dede3ec950620d2b82f6521bc4fa1e690"
 dependencies = [
  "bindgen 0.71.1",
  "r2r_common",
@@ -5823,9 +5812,8 @@ dependencies = [
 
 [[package]]
 name = "r2r_common"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9838c2f88c9fd088f188eadbf9459371b1e576affd7b2df04c45cd1e44b79b99"
+version = "0.9.6"
+source = "git+https://github.com/sequenceplanner/r2r?tag=0.9.6#2d080c4dede3ec950620d2b82f6521bc4fa1e690"
 dependencies = [
  "bindgen 0.71.1",
  "os_str_bytes",
@@ -5835,9 +5823,8 @@ dependencies = [
 
 [[package]]
 name = "r2r_macros"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be0cda9778c21f78d2d593df41298c14b6530061dc70d2d31eb831f7fec8d648"
+version = "0.9.6"
+source = "git+https://github.com/sequenceplanner/r2r?tag=0.9.6#2d080c4dede3ec950620d2b82f6521bc4fa1e690"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5846,7 +5833,7 @@ dependencies = [
 
 [[package]]
 name = "r2r_msg_gen"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "bindgen 0.71.1",
  "force-send-sync",
@@ -5862,9 +5849,8 @@ dependencies = [
 
 [[package]]
 name = "r2r_rcl"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5c208b2fbe64a00a42a70391f708298b6765769d39987286f4b7c82539561e"
+version = "0.9.6"
+source = "git+https://github.com/sequenceplanner/r2r?tag=0.9.6#2d080c4dede3ec950620d2b82f6521bc4fa1e690"
 dependencies = [
  "bindgen 0.71.1",
  "paste",

@@ -46,6 +46,20 @@ path = "src/bin/talos_gimbal_mock_server.rs"
 required-features = ["talos", "ffmpeg"]
 
 [patch.crates-io]
+# r2r 0.9.5 (latest on crates.io) cannot compile against ROS2 lyrical/rolling
+# headers (rcl_timer_init removed, RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_NODE
+# removed). 0.9.6 fixes both but was never published to crates.io, so pin the
+# git tag instead. r2r_rcl/r2r_common are patched too so the vendored
+# r2r_msg_gen's version-only deps resolve to the same git source.
+r2r = { git = "https://github.com/sequenceplanner/r2r", tag = "0.9.6" }
+r2r_rcl = { git = "https://github.com/sequenceplanner/r2r", tag = "0.9.6" }
+r2r_common = { git = "https://github.com/sequenceplanner/r2r", tag = "0.9.6" }
+
+# The vendored r2r_msg_gen (0.9.6 + local patch) replaces the git checkout's
+# copy: on rolling/lyrical bindgen emits an opaque rosidl_message_type_support_t
+# (no `data` field), so introspection must go through a manually declared
+# MessageTypeSupportView layout.
+[patch."https://github.com/sequenceplanner/r2r"]
 r2r_msg_gen = { path = "third_party/r2r_msg_gen" }
 
 [profile.dev.package."*"]

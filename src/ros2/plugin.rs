@@ -5,15 +5,17 @@ use crate::components::{
     Controlled, InfantryChassis, InfantryGimbal, InfantryLaunchOffset, SubscribeAutoAim,
 };
 use crate::config::SimulationConfig;
-use crate::robomaster::prelude::{ArmorRoot, PowerRune, RuneIndex, TechCore, tech_core_state_json};
+use crate::robomaster::prelude::{
+    ArmorParts, ArmorRoot, PowerRune, RuneIndex, TechCore, tech_core_state_json,
+};
 use crate::ros2::capture::{RosCaptureContext, RosCapturePlugin};
 use crate::ros2::livox::{RosLivoxContext, RosLivoxPlugin};
 use crate::ros2::prelude::AverageRateLimiter;
 use crate::ros2::prelude::transform;
 use crate::ros2::topic::*;
 use crate::systems::{GimbalAimTarget, GimbalAimTracker, projectile_launch};
-use crate::util::entity_query::HierarchyQuery;
 use bevy::ecs::system::RunSystemOnce;
+use bevy::image::BevyDefault;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use r2r::ClockType::SystemTime;
@@ -132,7 +134,7 @@ fn capture_rune(
     muzzle_pose_pub: ResMut<TopicPublisher<MuzzlePoseTopic>>,
     camera_pose_pub: ResMut<TopicPublisher<CameraPoseTopic>>,
     center: Query<(Entity, &GlobalTransform)>,
-    qq: HierarchyQuery,
+    armor_parts: Query<&ArmorParts>,
     armor: Query<(Entity, &GlobalTransform, &ArmorRoot)>,
     marker_pub: ResMut<TopicPublisher<OutpostMarkerTopic>>,
 ) {
@@ -214,7 +216,11 @@ fn capture_rune(
                 let name = format!("armor_{:?}", armor.id.as_usize())
                     .to_string()
                     .to_lowercase();
-                let tf = center.get(qq.of(entity).suffix("CENTER").any().one().unwrap()).unwrap().1.compute_transform();
+                let tf = center
+                    .get(armor_parts.get(entity).unwrap().marker())
+                    .unwrap()
+                    .1
+                    .compute_transform();
                 pub name as (tf.translation, tf.rotation);
             }
         }
@@ -223,7 +229,7 @@ fn capture_rune(
     let stamp = Clock::to_builtin_time(&res_unwrap!(clock).get_now().unwrap());
     for (entity, tf, armor) in armor {
         let mut tff = center
-            .get(qq.of(entity).suffix("CENTER").any().one().unwrap())
+            .get(armor_parts.get(entity).unwrap().marker())
             .unwrap()
             .1
             .compute_transform();
@@ -426,7 +432,13 @@ impl Plugin for ROS2Plugin {
                 context: RosCaptureContext {
                     clock: clock.clone(),
                     fov_y,
-                    publish_compressed: false,
+                    publish_compressed: sim_config.ros2.publish_compressed,
+                    publish_period_ns: if sim_config.ros2.publish_hz > 0.0 {
+                        (1_000_000_000.0 / sim_config.ros2.publish_hz) as u64
+                    } else {
+                        0
+                    },
+                    last_publish_ns: Arc::new(AtomicU64::new(0)),
                     camera_info,
                     image_raw,
                     image_compressed,

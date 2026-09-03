@@ -2,7 +2,6 @@ use bevy::prelude::{App, Resource};
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy::tasks::futures_lite::StreamExt;
 use bevy::tasks::futures_lite::future::block_on;
-use futures::SinkExt;
 use futures::channel::mpsc;
 use futures::channel::mpsc::{Sender, TryRecvError};
 use r2r::geometry_msgs::msg::PoseStamped;
@@ -26,12 +25,12 @@ impl<T: RosTopic> TopicPublisher<T> {
     }
 
     pub fn publish(&self, message: T::T) {
+        // Never block or queue unboundedly: /image_raw produces ~700MB/s at
+        // 150FPS, far faster than DDS can serialize. Once the channel is full,
+        // the incoming sample is dropped (drop-newest) while the already
+        // queued frames drain; in-flight memory stays bounded.
         let mut sender = self.sender.clone();
-        AsyncComputeTaskPool::get()
-            .spawn(async move {
-                let _ = sender.send(message).await;
-            })
-            .detach();
+        let _ = sender.try_send(message);
     }
 }
 
@@ -70,7 +69,9 @@ fn subscriber<T: RosTopic>(node: &mut Node, signal: Arc<AtomicBool>) -> TopicSub
 }
 
 fn publisher<T: RosTopic>(node: &mut Node, signal: Arc<AtomicBool>) -> TopicPublisher<T> {
-    let (sender, mut receiver) = mpsc::channel(1024);
+    // Small capacity: at 1440x1080x3 per image, 16 slots still allow ~74MB in
+    // flight while keeping worst-case memory bounded.
+    let (sender, mut receiver) = mpsc::channel(16);
 
     let publisher = node.create_publisher(T::TOPIC, T::QOS).unwrap();
 
@@ -146,7 +147,11 @@ topic!(
     pub {
         "/camera_info" as CameraInfo as CameraInfoTopic;
         "/image_raw" as Image as ImageRawTopic;
-        "/image_compressed" as CompressedImage as ImageCompressedTopic;
+        // image_transport convention (<base>/<transport>): subscribing with
+        // the "compressed" transport on base /image_raw resolves to this
+        // topic, so `image_transport republish`, RViz2 transport hints and
+        // compressed-aware viewers work out of the box.
+        "/image_raw/compressed" as CompressedImage as ImageCompressedTopic;
         "/livox/lidar" as PointCloud2 as LivoxPointCloudTopic;
         "/tf" as TFMessage as GlobalTransformTopic;
         "/simulator/marker" as Marker as OutpostMarkerTopic;

@@ -50,6 +50,23 @@ line_num = 20
 tag_default = 0
 intensity_default = 1000.0
 
+[ros2]
+# Image topic publishing limits. Each 1440x1080 RGB frame is ~4.7MB; at
+# 110+FPS that is ~500MB/s of raw traffic. A subscriber on a slower link
+# (WiFi / remote LAN) cannot drain it, and the DDS layer accumulates unsent
+# samples inside the simulator until it runs out of memory and aborts
+# ("memory allocation ... failed" / 0xc0000409).
+#
+# For remote consumers over the network, enable compressed publishing:
+#   publish_hz = 30.0
+#   publish_compressed = true
+# The stream then appears as /image_raw/compressed (sensor_msgs/CompressedImage,
+# JPEG, image_transport convention). To view it with tools that only handle raw
+# images (e.g. rqt_image_view), republish it on the consumer machine:
+#   ros2 run image_transport republish compressed in:=/image_raw raw out:=/image_raw
+publish_hz = 60.0          # max image publish rate in Hz; 0 = every frame (dangerous for remote subscribers)
+publish_compressed = false # true = publish /image_raw/compressed (JPEG) instead of /image_raw
+
 [physics]
 fixed_hz = 120.0                # fixed physics ticks per second
 substep_count = 8               # physics substeps per fixed tick

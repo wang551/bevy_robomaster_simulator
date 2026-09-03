@@ -18,7 +18,13 @@ use r2r::Clock;
 use r2r::sensor_msgs::msg::{CameraInfo, RegionOfInterest};
 use r2r::std_msgs::msg::Header;
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+fn stamp_to_ns(stamp: &r2r::builtin_interfaces::msg::Time) -> u64 {
+    let sec = stamp.sec.max(0) as u64;
+    sec.saturating_mul(1_000_000_000) + stamp.nanosec as u64
+}
 
 struct RosSnapshotSync {
     stamp: RefCell<r2r::builtin_interfaces::msg::Time>,
@@ -85,11 +91,28 @@ impl GpuCaptureHandler for RosSnapshotCreator {
         world: &World,
         _frame_id: Option<CaptureFrameId>,
     ) -> Option<Box<dyn SnapshotSync>> {
-        let clock = world.resource::<RosCaptureContext>();
+        let ctx = world.resource::<RosCaptureContext>();
+        let stamp = Clock::to_builtin_time(&ctx.clock.lock().ok()?.get_now().ok()?);
+
+        // Rate-limit publishing (config [ros2] publish_hz). Rate limiting here
+        // also skips the GPU->CPU copy for the dropped frames.
+        if ctx.publish_period_ns > 0 {
+            let now_ns = stamp_to_ns(&stamp);
+            let last = ctx.last_publish_ns.load(Ordering::Relaxed);
+            if now_ns < last.saturating_add(ctx.publish_period_ns) {
+                return None;
+            }
+            if ctx
+                .last_publish_ns
+                .compare_exchange(last, now_ns, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+            {
+                return None;
+            }
+        }
+
         Some(Box::new(RosSnapshotSync {
-            stamp: RefCell::new(Clock::to_builtin_time(
-                &clock.clock.lock().unwrap().get_now().unwrap(),
-            )),
+            stamp: RefCell::new(stamp),
         }))
     }
 }
@@ -102,6 +125,10 @@ pub struct RosCaptureContext {
     pub clock: Arc<Mutex<Clock>>,
     pub fov_y: f32,
     pub publish_compressed: bool,
+    /// Minimum interval between published frames in nanoseconds
+    /// (0 = publish every frame).
+    pub publish_period_ns: u64,
+    pub(crate) last_publish_ns: Arc<AtomicU64>,
     pub camera_info: TopicPublisher<CameraInfoTopic>,
     pub image_raw: TopicPublisher<ImageRawTopic>,
     pub image_compressed: TopicPublisher<ImageCompressedTopic>,
