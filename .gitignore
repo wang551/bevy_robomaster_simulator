@@ -40,6 +40,8 @@
 .mimosa/
 assets_old
 .idea
+.vscode
+.zcode
 
 # 3D 源文件 / 系统文件
 *.stp
