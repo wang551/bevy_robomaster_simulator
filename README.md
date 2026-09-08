@@ -92,15 +92,13 @@
 * `/camera_info`
 * `/image_raw` 或 `/image_raw/compressed`（二选一，由 `config.toml` 的 `[ros2] publish_compressed` 决定；后者为 JPEG 的 `sensor_msgs/CompressedImage`，遵循 image_transport 命名约定）
 * `/tf`
-* `/gimbal_pose`
-* `/odom_pose`
-* `/camera_pose`
+* `/gimbal_pose`、`/odom_pose`、`/muzzle_pose`、`/camera_pose`（位姿话题：该 frame 相对**父 frame** 的位姿，`header.frame_id` 为父 frame；如 `/gimbal_pose` 是 `gimbal_link` 在 `odom` 下的位姿，姿态四元数与 `/tf` 中 `odom→gimbal_link` 的旋转逐位一致）
 
 > **局域网订阅注意**：1440×1080 原始图像一帧约 4.7MB，全速发布可达 ~500MB/s。订阅方在局域网/WiFi 等较慢链路时请设置 `publish_compressed = true` 并订阅 `/image_raw/compressed`（JPEG，约 20-40MB/s）；消费速度跟不上时 DDS 会在仿真器进程内无界堆积未发送数据，导致内存耗尽崩溃（`memory allocation failed` / 0xc0000409）。`[ros2] publish_hz` 可进一步限制发布帧率。只认原始图像的工具（如 rqt_image_view）可在消费端转回 raw：`ros2 run image_transport republish compressed in:=/image_raw raw out:=/image_raw`。
 
 **订阅话题**
 
-* `/armor_solver/cmd_gimbal`
+* `/rm_gimbal/cmd`（`rm_interfaces/GimbalCmd`）
 
 ### Talos 共享内存接口
 

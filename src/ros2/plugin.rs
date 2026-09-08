@@ -55,6 +55,9 @@ struct FireRateLimiter(AverageRateLimiter);
 #[derive(Resource, Deref, DerefMut)]
 struct TechCoreStateRateLimiter(AverageRateLimiter);
 
+#[derive(Resource, Deref, DerefMut)]
+struct CmdLogRateLimiter(AverageRateLimiter);
+
 macro_rules! tf_tree {
     (stamp: $stamp:expr;$root:literal { $($content:tt)* }) => {{
         let stamp = $stamp;
@@ -81,9 +84,11 @@ macro_rules! tf_tree {
         {
             let $parent = &$current;
             let $current = $curr_name;
-            $crate::add_tf_frame!($tf_vec, tf_tree!(@header $stamp, $parent), $current, $translation, $rotation);
+            let frame_translation = $translation;
+            let frame_rotation = $rotation;
+            $crate::add_tf_frame!($tf_vec, tf_tree!(@header $stamp, $parent), $current, frame_translation, frame_rotation);
             $(
-                $pub_.publish($crate::pose!(tf_tree!(@header $stamp, $current)));
+                $pub_.publish($crate::pose!(tf_tree!(@header $stamp, $parent), frame_translation, frame_rotation));
             )*
             tf_tree!(@frame $tf_vec, $stamp, $parent, $current, $($children)*);
         }
@@ -104,9 +109,11 @@ macro_rules! tf_tree {
             $(let $name = $expr;)*
             let $parent = &$current;
             let $current = $curr_name;
-            $crate::add_tf_frame!($tf_vec, tf_tree!(@header $stamp, $parent), $current, $translation, $rotation);
+            let frame_translation = $translation;
+            let frame_rotation = $rotation;
+            $crate::add_tf_frame!($tf_vec, tf_tree!(@header $stamp, $parent), $current, frame_translation, frame_rotation);
             $(
-                $pub_.publish($crate::pose!(tf_tree!(@header $stamp, $current)));
+                $pub_.publish($crate::pose!(tf_tree!(@header $stamp, $parent), frame_translation, frame_rotation));
             )*
             tf_tree!(@frame $tf_vec, $stamp, $parent, $current, $($children)*);
         }
@@ -291,6 +298,7 @@ fn process_subscription(
     mut commands: Commands,
     gimbal_cmd: ResMut<TopicSubscriber<GimbalCmdTopic>>,
     mut fire_rate_limiter: ResMut<FireRateLimiter>,
+    mut cmd_log_limiter: ResMut<CmdLogRateLimiter>,
     gimbal: Single<
         (Entity, Option<&mut GimbalAimTracker>),
         (
@@ -303,10 +311,19 @@ fn process_subscription(
 ) {
     let (gimbal_entity, mut tracker) = gimbal.into_inner();
     fire_rate_limiter.tick(time.delta());
+    cmd_log_limiter.tick(time.delta());
     loop {
         let Ok(Some(cmd)) = gimbal_cmd.try_recv() else {
             return;
         };
+        // Diagnostic for the rm_sim_bridge round-trip: echo exactly what the
+        // message carried so sent-vs-received field values can be diffed live.
+        if cmd_log_limiter.allow() {
+            info!(
+                "[ROS2] GimbalCmd yaw={:.3} pitch={:.3} yaw_diff={:.3} pitch_diff={:.3} distance={:.3} fire={}",
+                cmd.yaw, cmd.pitch, cmd.yaw_diff, cmd.pitch_diff, cmd.distance, cmd.fire_advice
+            );
+        }
         // No solution from the solver: drop the target so the PID loop stops driving.
         if cmd.distance == -1.0 {
             commands.entity(gimbal_entity).remove::<GimbalAimTracker>();
@@ -427,6 +444,7 @@ impl Plugin for ROS2Plugin {
             .insert_resource(StopSignal(signal_arc.clone()))
             .insert_resource(FireRateLimiter(AverageRateLimiter::from_hz(10.0)))
             .insert_resource(TechCoreStateRateLimiter(AverageRateLimiter::from_hz(20.0)))
+            .insert_resource(CmdLogRateLimiter(AverageRateLimiter::from_hz(2.0)))
             .add_plugins(RosCapturePlugin {
                 config: color_capture_config,
                 context: RosCaptureContext {

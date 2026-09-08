@@ -83,23 +83,28 @@ macro_rules! add_tf_frame {
     };
 }
 
+/// Builds a PoseStamped from a frame's translation/rotation, routed through the
+/// same Bevy→ROS axis alignment as `add_tf_frame!` so the orientation matches the
+/// frame's `/tf` quaternion bit-for-bit.
 #[macro_export]
 macro_rules! pose {
-    ($hdr:expr) => {
+    ($hdr:expr, $translation:expr, $rotation:expr) => {
         ::r2r::geometry_msgs::msg::PoseStamped {
             header: $hdr.clone(),
-            pose: ::r2r::geometry_msgs::msg::Pose {
-                position: ::r2r::geometry_msgs::msg::Point {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                orientation: ::r2r::geometry_msgs::msg::Quaternion {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                    w: 1.0,
-                },
+            pose: {
+                let aligned = $crate::ros2::prelude::transform(
+                    ::bevy::prelude::Transform::IDENTITY
+                        .with_translation($translation)
+                        .with_rotation($rotation),
+                );
+                ::r2r::geometry_msgs::msg::Pose {
+                    position: ::r2r::geometry_msgs::msg::Point {
+                        x: aligned.translation.x,
+                        y: aligned.translation.y,
+                        z: aligned.translation.z,
+                    },
+                    orientation: aligned.rotation,
+                }
             },
         }
     };
