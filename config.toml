@@ -29,6 +29,12 @@ metalfx_frame_generation = false
 # Output/render resolution ratio used by MetalFX temporal upscaling. Clamped to 1.0..=3.0.
 metalfx_scale = 2.0
 illuminance = 500.0
+# Camera bloom: emissive surfaces (armor light bars) glow like overexposed LEDs on a real camera.
+bloom = true
+# Bloom strength; 0 disables the effect.
+bloom_intensity = 0.2
+# Emissive multiplier on armor light strips driving the glow; 0 disables.
+light_strip_emissive_boost = 8.0
 [capture.color]
 # RGB capture resolution for existing camera pipeline.
 width = 1440

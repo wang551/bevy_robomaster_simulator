@@ -1,6 +1,7 @@
 use avian3d::prelude::*;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy_inspector_egui::bevy_egui::{EguiGlobalSettings, PrimaryEguiContext};
 
@@ -70,8 +71,16 @@ pub fn setup(
             factor: UpscaleFactor::clamped(config.render.metalfx_scale),
             frame_generation: config.render.metalfx_frame_generation,
         });
-    } else if config.render.main_camera_fxaa {
-        main_camera.insert(Fxaa::default());
+    } else {
+        if config.render.main_camera_fxaa {
+            main_camera.insert(Fxaa::default());
+        }
+        if config.render.bloom && config.render.bloom_intensity > 0.0 {
+            main_camera.insert(Bloom {
+                intensity: config.render.bloom_intensity,
+                ..Bloom::NATURAL
+            });
+        }
     }
     if config.debug.egui {
         main_camera.insert(PrimaryEguiContext);

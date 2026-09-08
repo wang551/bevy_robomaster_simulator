@@ -1,3 +1,4 @@
+use crate::config::SimulationConfig;
 use crate::query;
 use crate::robomaster::prelude::{
     ArmorFrame, ArmorLabel, ArmorSpec, MarkerData, Team, derive_armor_frame, extract_markers,
@@ -7,13 +8,18 @@ use avian3d::prelude::{
     ColliderConstructor, ColliderConstructorHierarchy, CollisionLayers, TrimeshFlags,
 };
 use bevy::app::App;
+use bevy::asset::{AssetId, Handle};
+use bevy::color::LinearRgba;
+use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::SystemParam;
 use bevy::ecs::system::lifetimeless::Read;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
+use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::{
     Added, Assets, Changed, ChildOf, Children, Commands, Component, Entity, GlobalTransform, Mesh,
-    Mesh3d, Name, Plugin, Query, Res, Update, Vec3, Visibility, With, info, warn,
+    Mesh3d, Name, Plugin, Query, Res, ResMut, Resource, Update, Vec3, Visibility, With, info, warn,
 };
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Component, Debug)]
@@ -460,6 +466,47 @@ fn extract_triangle_vertices(mesh: &Mesh) -> Option<Vec<Vec3>> {
     (!triangles.is_empty()).then_some(triangles)
 }
 
+/// Emissive-boosted clones of the GLB materials used by armor light strips, keyed by source asset.
+#[derive(Resource, Default)]
+struct BoostedLightMaterialCache(HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>>);
+
+/// Real LED bars overexpose on camera and bleed into a halo; pushing their emissive far past the
+/// scene's HDR range is what lets the camera's `Bloom` reproduce that. Config is read once per
+/// strip (`Added<LightStrip>` fires a single time), so changing the boost needs a restart.
+fn boost_light_strip_materials(
+    mut strips: Query<&mut MeshMaterial3d<StandardMaterial>, Added<LightStrip>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cache: ResMut<BoostedLightMaterialCache>,
+    config: Res<SimulationConfig>,
+) {
+    let boost = config.render.light_strip_emissive_boost;
+    if boost <= 0.0 {
+        return;
+    }
+    for mut mesh_material in &mut strips {
+        let handle = cache
+            .0
+            .entry(mesh_material.0.id())
+            .or_insert_with(|| {
+                let Some(original) = materials.get(&mesh_material.0).cloned() else {
+                    return mesh_material.0.clone();
+                };
+                let emissive = original.emissive;
+                materials.add(StandardMaterial {
+                    emissive: LinearRgba::new(
+                        emissive.red * boost,
+                        emissive.green * boost,
+                        emissive.blue * boost,
+                        emissive.alpha,
+                    ),
+                    ..original
+                })
+            })
+            .clone();
+        mesh_material.0 = handle;
+    }
+}
+
 fn insert(
     root: Query<(Entity, Read<ScanArmor>), Added<ScanArmor>>,
     mut constructor: ArmorConstructor,
@@ -507,5 +554,7 @@ pub(super) struct ArmorConstructorPlugin;
 impl Plugin for ArmorConstructorPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, (insert, sync_armor_stickers));
+        app.init_resource::<BoostedLightMaterialCache>();
+        app.add_systems(Update, boost_light_strip_materials.after(insert));
     }
 }

@@ -5,6 +5,7 @@ pub mod view_copy;
 use bevy::camera::RenderTarget;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 
 use crate::config::SimulationConfig;
@@ -44,6 +45,12 @@ pub fn setup_capture_camera(world: &mut World) {
             factor: UpscaleFactor::clamped(config.render.metalfx_scale),
             frame_generation: config.render.metalfx_frame_generation,
         });
+    // Bloom feeds off HDR values, which the capture camera needs anyway for the light-bar glow to
+    // reach the published image. Untested in combination with MetalFX, so MetalFX wins there.
+    let bloom_intensity = world
+        .get_resource::<SimulationConfig>()
+        .filter(|config| config.render.bloom && config.render.bloom_intensity > 0.0)
+        .map(|config| config.render.bloom_intensity);
 
     let mut capture_camera = world.spawn((
         Camera3d::default(),
@@ -66,6 +73,11 @@ pub fn setup_capture_camera(world: &mut World) {
     ));
     if let Some(metalfx) = metalfx {
         capture_camera.insert(metalfx);
+    } else if let Some(intensity) = bloom_intensity {
+        capture_camera.insert(Bloom {
+            intensity,
+            ..Bloom::NATURAL
+        });
     }
 }
 

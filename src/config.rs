@@ -80,6 +80,12 @@ impl Default for PreviewConfig {
 pub struct RenderConfig {
     pub illuminance: f32,
     pub shadows: bool,
+    /// Camera bloom; overexposed emissive surfaces (armor light bars) get a halo like on a real camera.
+    pub bloom: bool,
+    /// Bloom strength (Bevy `Bloom::intensity`); 0 disables the effect.
+    pub bloom_intensity: f32,
+    /// Emissive multiplier on armor light strips so bloom picks them up like overexposed LEDs; 0 disables.
+    pub light_strip_emissive_boost: f32,
     pub main_camera_fxaa: bool,
     #[serde(alias = "main_camera_metalfx_temporal")]
     pub metalfx_temporal: bool,
@@ -94,6 +100,9 @@ impl Default for RenderConfig {
         Self {
             illuminance: 50.0,
             shadows: false,
+            bloom: true,
+            bloom_intensity: 0.2,
+            light_strip_emissive_boost: 8.0,
             main_camera_fxaa: false,
             metalfx_temporal: cfg!(target_os = "macos"),
             metalfx_frame_generation: false,
