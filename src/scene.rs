@@ -261,3 +261,72 @@ fn power_rune_collision(
     }
     collision
 }
+
+/// The GLB assets are the only model source of truth (no .blend files are tracked), so
+/// they are guarded here against exporting mistakes instead of at runtime.
+#[cfg(test)]
+mod glb_assets {
+    use serde_json::Value;
+
+    /// Parse the JSON chunk out of a GLB container.
+    fn glb_json_chunk(path: &str) -> Value {
+        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+        assert!(bytes.starts_with(b"glTF"), "{path} is not a GLB container");
+        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        assert_eq!(&bytes[16..20], b"JSON", "first chunk of {path} is not JSON");
+        serde_json::from_slice(&bytes[20..20 + json_len]).expect("GLB JSON chunk should parse")
+    }
+
+    fn vehicle_glb() -> Value {
+        glb_json_chunk(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vehicle.glb"))
+    }
+
+    /// vehicle.glb was once exported with stray laser-detector assemblies (激光检测总装)
+    /// parented under GIMBAL, rendering as floating "tech cores" above every vehicle.
+    /// `tools/strip_vehicle_stray_nodes.py` removes them; this keeps them from coming back.
+    #[test]
+    fn vehicle_glb_has_no_stray_tech_core_nodes() {
+        let json = vehicle_glb();
+        let strays: Vec<&str> = json["nodes"]
+            .as_array()
+            .expect("nodes array")
+            .iter()
+            .filter_map(|node| node["name"].as_str())
+            .filter(|name| name.contains("激光检测总装"))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "vehicle.glb regained stray nodes {strays:?}; re-run tools/strip_vehicle_stray_nodes.py"
+        );
+    }
+
+    /// `setup_vehicle` resolves VEHICLE/GIMBAL/BASE by name at runtime, and the glTF loader
+    /// walks the scene hierarchy — both must stay intact through any asset surgery.
+    #[test]
+    fn vehicle_glb_hierarchy_is_well_formed() {
+        let json = vehicle_glb();
+        let nodes = json["nodes"].as_array().expect("nodes array");
+        for required in ["VEHICLE", "GIMBAL", "BASE"] {
+            assert!(
+                nodes.iter().any(|node| node["name"] == required),
+                "vehicle.glb lost required node {required}"
+            );
+        }
+        let index =
+            |value: &Value| value.as_u64().expect("index is a non-negative integer") as usize;
+        for scene in json["scenes"].as_array().into_iter().flatten() {
+            for root in scene["nodes"].as_array().into_iter().flatten() {
+                assert!(index(root) < nodes.len(), "scene root index out of range");
+            }
+        }
+        let mesh_count = json["meshes"].as_array().map_or(0, |meshes| meshes.len());
+        for node in nodes {
+            for child in node["children"].as_array().into_iter().flatten() {
+                assert!(index(child) < nodes.len(), "child index out of range");
+            }
+            if let Some(mesh) = node["mesh"].as_u64() {
+                assert!((mesh as usize) < mesh_count, "mesh index out of range");
+            }
+        }
+    }
+}
