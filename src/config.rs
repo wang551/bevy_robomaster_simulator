@@ -26,6 +26,8 @@ pub struct SimulationConfig {
     pub vehicle: VehicleConfig,
     #[serde(default)]
     pub mecanum: MecanumConfig,
+    #[serde(default)]
+    pub armor: ArmorConfig,
     pub projectile: ProjectileConfig,
     pub camera: CameraConfig,
 }
@@ -369,6 +371,28 @@ impl Default for RosPublishConfig {
     }
 }
 
+/// Armor hit-incidence limits in degrees, measured from the hit face around the
+/// corresponding edge (RoboMaster rule: 受击打面下边缘 105°内、上边缘 120°内、左右边缘 145°内
+/// 不得被遮挡). Projectiles arriving from outside that zone do not count as hits;
+/// 180 or above disables an edge's limit. Hot-reloadable.
+#[derive(Deserialize, Reflect, Clone)]
+#[serde(default)]
+pub struct ArmorConfig {
+    pub hit_angle_bottom: f32,
+    pub hit_angle_top: f32,
+    pub hit_angle_side: f32,
+}
+
+impl Default for ArmorConfig {
+    fn default() -> Self {
+        Self {
+            hit_angle_bottom: 105.0,
+            hit_angle_top: 120.0,
+            hit_angle_side: 145.0,
+        }
+    }
+}
+
 impl SimulationConfig {
     pub fn load() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let content = std::fs::read_to_string("config.toml")?;
@@ -391,6 +415,7 @@ impl Default for SimulationConfig {
                 physics: PhysicsConfig::default(),
                 vehicle: VehicleConfig::default(),
                 mecanum: MecanumConfig::default(),
+                armor: ArmorConfig::default(),
                 projectile: ProjectileConfig {
                     lifetime: 5.0,
                     speed: 25.0,
