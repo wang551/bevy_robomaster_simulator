@@ -1,8 +1,6 @@
 use crate::config::SimulationConfig;
 use crate::query;
-use crate::robomaster::prelude::{
-    ArmorFrame, ArmorLabel, ArmorSpec, MarkerData, Team, derive_armor_frame, extract_markers,
-};
+use crate::robomaster::prelude::{ArmorLabel, ArmorSpec, MarkerData, Team, extract_markers};
 use crate::util::entity_query::HierarchyQuery;
 use avian3d::prelude::{
     ColliderConstructor, ColliderConstructorHierarchy, CollisionLayers, TrimeshFlags,
@@ -16,8 +14,8 @@ use bevy::ecs::system::lifetimeless::Read;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::{
-    Added, Assets, Changed, ChildOf, Children, Commands, Component, Entity, GlobalTransform, Mesh,
-    Mesh3d, Name, Plugin, Query, Res, ResMut, Resource, Update, Vec3, Visibility, With, info, warn,
+    Added, Assets, Changed, ChildOf, Children, Commands, Component, Entity, Mesh, Mesh3d, Name,
+    Plugin, Query, Res, ResMut, Resource, Update, Vec3, Visibility, With, info,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -107,7 +105,6 @@ pub struct ArmorConstructor<'w, 's> {
     name: Query<'w, 's, Read<Name>, With<ChildOf>>,
     mesh_query: Query<'w, 's, Read<Mesh3d>>,
     collision_layers: Query<'w, 's, Read<CollisionLayers>>,
-    global_transforms: Query<'w, 's, Read<GlobalTransform>>,
     mesh_assets: Res<'w, Assets<Mesh>>,
 }
 
@@ -222,12 +219,11 @@ impl ArmorConstructor<'_, '_> {
         root: Entity,
         armor_name: String,
         armor_data: &ScanArmor,
-        owner: Entity,
     ) -> Option<ArmorRoot> {
         let query = HierarchyQuery::new(self.child_of, self.children, self.name);
         let root_query = query.of(root).flatten();
-        let armor_entity = query!(root_query, .."ARMOR")?;
         {
+            let armor_entity = query!(root_query, .."ARMOR")?;
             let collision_layers = self
                 .collision_layers
                 .get(armor_entity)
@@ -298,7 +294,7 @@ impl ArmorConstructor<'_, '_> {
         }
 
         let marker = query!(root_query, .."MARKER", ...)?;
-        let marker_data = self.process_marker(marker, &armor_name, armor_data)?;
+        self.process_marker(marker, &armor_name, armor_data)?;
 
         let vertex = [
             (Side::Left, query!(root_query, .."VERTEX_L", ...)?),
@@ -308,11 +304,14 @@ impl ArmorConstructor<'_, '_> {
             let v = self
                 .extract_vertex(vertex, &armor_name, armor_data)
                 .unwrap();
-            let centroid = self.world_centroid(vertex, &v);
-            self.commands
-                .entity(vertex)
-                .insert((VertexData { side, points: v }, Visibility::Hidden));
-            (vertex, centroid)
+            self.commands.entity(vertex).insert((
+                VertexData {
+                    side,
+                    points: v.clone(),
+                },
+                Visibility::Hidden,
+            ));
+            vertex
         });
         {
             let c_query = query!(root_query, .."_C", ref).flatten();
@@ -341,23 +340,10 @@ impl ArmorConstructor<'_, '_> {
             label: armor_data.spec.label(),
         });
 
-        if let [(_, Some(vertex_l)), (_, Some(vertex_r))] = vertices {
-            self.attach_armor_frame(
-                armor_entity,
-                marker,
-                &marker_data,
-                [vertex_l, vertex_r],
-                owner,
-                &armor_name,
-            );
-        } else {
-            warn!("Armor '{armor_name}': vertex transforms unavailable, its hits count unfiltered");
-        }
-
         let parts = ArmorParts {
             marker,
             lights,
-            vertices: vertices.map(|(vertex, _)| vertex),
+            vertices,
         };
         self.commands.entity(root).insert((
             ar.clone(),
@@ -365,54 +351,6 @@ impl ArmorConstructor<'_, '_> {
             ArmorStickerSelection::new(armor_data.spec.label()),
         ));
         Some(ar)
-    }
-
-    /// Centroid of `points` (mesh-local) in world space, or `None` if the transform is
-    /// not available yet.
-    fn world_centroid(&self, entity: Entity, points: &[Vec3]) -> Option<Vec3> {
-        let transform = self.global_transforms.get(entity).ok()?;
-        let sum = points
-            .iter()
-            .map(|point| transform.transform_point(*point))
-            .sum::<Vec3>();
-        Some(sum / points.len() as f32)
-    }
-
-    /// Derives the plate's hit-face basis (see [`derive_armor_frame`]) and stores it in
-    /// the armor collider's local space, so collision handling can rotate it back into
-    /// world space with the collider's transform at hit time.
-    fn attach_armor_frame(
-        &mut self,
-        armor_entity: Entity,
-        marker: Entity,
-        marker_data: &MarkerData,
-        vertex_centroids: [Vec3; 2],
-        owner: Entity,
-        armor_name: &str,
-    ) {
-        let (Ok(marker_transform), Ok(owner_transform), Ok(armor_transform)) = (
-            self.global_transforms.get(marker),
-            self.global_transforms.get(owner),
-            self.global_transforms.get(armor_entity),
-        ) else {
-            warn!("Armor '{armor_name}': transforms unavailable, its hits count unfiltered");
-            return;
-        };
-        let marker_points = marker_data.0.map(|p| marker_transform.transform_point(p));
-        let Some(world) = derive_armor_frame(
-            &marker_points,
-            vertex_centroids,
-            owner_transform.translation(),
-        ) else {
-            warn!("Armor '{armor_name}': no plate frame derivable, its hits count unfiltered");
-            return;
-        };
-        let to_local = armor_transform.rotation().inverse();
-        self.commands.entity(armor_entity).insert(ArmorFrame {
-            normal: to_local * world.normal,
-            up: to_local * world.up,
-            right: to_local * world.right,
-        });
     }
 }
 
@@ -523,7 +461,7 @@ fn insert(
                     .map(|name| (child, name))
             })
             .for_each(|(ent, name)| {
-                constructor.process_armor_root(ent, name.to_string(), armor_data, root_entity);
+                constructor.process_armor_root(ent, name.to_string(), armor_data);
             })
     }
 }
