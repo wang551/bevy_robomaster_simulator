@@ -1,20 +1,24 @@
 use avian3d::prelude::{
     CollisionEventsEnabled, CollisionStart, LinearVelocity, PhysicsSchedule, PhysicsStepSystems,
+    Position,
 };
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::SystemParam;
 use bevy::ecs::system::lifetimeless::Read;
 use bevy::prelude::{
     ChildOf, Commands, Entity, GlobalTransform, On, Plugin, Query, Res, ResMut, Resource, Update,
-    Vec3, With, Without, warn,
+    Vec2, Vec3, With, Without, warn,
 };
 use std::collections::HashSet;
 use std::sync::Once;
 
 use super::construct::Armor;
-use super::incidence::{ArmorFrame, ArmorHitAngles, PreSolveVelocity};
+use super::incidence::{ArmorFaceBounds, ArmorFrame, ArmorHitAngles, PreSolveVelocity};
+use crate::components::Infantry;
+use crate::components::ProjectileTeam;
 use crate::config::SimulationConfig;
 use crate::robomaster::power_rune::prelude::Projectile;
+use crate::robomaster::prelude::Team;
 use crate::statistic::ProjectileStatistics;
 
 /// Avian triggers collision events after contact solving (`PhysicsStepSystems::Finalize`),
@@ -45,27 +49,78 @@ fn cleanup_consumed_armor_projectiles(
 
 #[derive(SystemParam)]
 struct ArmorHitContext<'w, 's> {
-    armors: Query<'w, 's, Read<Armor>>,
-    frames: Query<'w, 's, (&'static GlobalTransform, Option<&'static ArmorFrame>)>,
+    armors: Query<'w, 's, &'static Armor>,
+    infantry: Query<'w, 's, &'static Infantry>,
+    frames: Query<
+        'w,
+        's,
+        (
+            &'static GlobalTransform,
+            Option<&'static ArmorFrame>,
+            Option<&'static ArmorFaceBounds>,
+        ),
+    >,
     child_of: Query<'w, 's, Read<ChildOf>>,
 }
 
 impl ArmorHitContext<'_, '_> {
-    fn is_armor(&self, collider: Entity) -> bool {
-        self.armors.contains(collider)
-            || self
-                .child_of
-                .iter_ancestors(collider)
-                .any(|ancestor| self.armors.contains(ancestor))
-    }
-
-    /// Applies the angular gate to a collider using the plate frame found on the collider
-    /// or its nearest armor ancestor. Colliders without a derived frame count unfiltered.
-    fn within_hit_zone(&self, collider: Entity, angles: &ArmorHitAngles, incoming: Vec3) -> bool {
+    /// True when the collider belongs to a robot's body (gimbal structure, chassis
+    /// mesh, ...) rather than an armor plate or the environment.
+    fn is_robot_body(&self, collider: Entity) -> bool {
         let mut entity = Some(collider);
         while let Some(current) = entity {
-            if let Ok((transform, Some(frame))) = self.frames.get(current) {
-                return angles.accepts(&frame.rotated_by(transform.rotation()), incoming);
+            if self.infantry.contains(current) {
+                return true;
+            }
+            entity = self
+                .child_of
+                .get(current)
+                .ok()
+                .map(|child_of| child_of.parent());
+        }
+        false
+    }
+
+    /// Team of the armor plate the collider belongs to, if it is one.
+    fn armor_team(&self, collider: Entity) -> Option<Team> {
+        let mut entity = Some(collider);
+        while let Some(current) = entity {
+            if let Ok(armor) = self.armors.get(current) {
+                return Some(armor.team);
+            }
+            entity = self
+                .child_of
+                .get(current)
+                .ok()
+                .map(|child_of| child_of.parent());
+        }
+        None
+    }
+
+    /// Applies the face-rectangle and angular gates to a collider using the plate frame
+    /// found on the collider or its nearest armor ancestor. Colliders without a derived
+    /// frame count unfiltered. A contact whose surface point projects outside the face
+    /// rectangle (module rim, frame) is not a face hit.
+    fn within_hit_zone(
+        &self,
+        collider: Entity,
+        angles: &ArmorHitAngles,
+        incoming: Vec3,
+        ball_position: Option<Vec3>,
+        face_margin: f32,
+    ) -> bool {
+        let mut entity = Some(collider);
+        while let Some(current) = entity {
+            if let Ok((transform, Some(frame), bounds)) = self.frames.get(current) {
+                let world = frame.rotated_by(transform.rotation());
+                if let (Some(bounds), Some(ball)) = (bounds, ball_position) {
+                    let relative = ball - transform.translation();
+                    let point = Vec2::new(relative.dot(world.right), relative.dot(world.up));
+                    if !bounds.contains(point, face_margin) {
+                        return false;
+                    }
+                }
+                return angles.accepts(&world, incoming);
             }
             entity = self
                 .child_of
@@ -82,25 +137,43 @@ impl ArmorHitContext<'_, '_> {
     }
 }
 
-/// Counts a projectile touching an armor plate, but only when the incoming direction lies
-/// inside the rule's per-edge angular zone; contacts with the rear of a plate (e.g. a ball
-/// that ghosted through the chassis) do not count.
+/// Counts a projectile touching an enemy armor plate, but only when the incoming
+/// direction lies inside the rule's per-edge angular zone. The first decisive contact
+/// determines the projectile's fate:
+/// - enemy armor in zone: counts;
+/// - enemy armor out of zone: spent without counting (otherwise a ball ghosting through
+///   the chassis would register on whatever armor happens to be behind it);
+/// - a robot's non-armor body (gimbal structure, chassis mesh): spent as well, so a
+///   ricochet off the body onto a plate afterwards does not register;
+/// - friendly armor and the environment are ignored and never consume the projectile.
 fn handle_armor_collision(
     event: On<CollisionStart>,
     mut commands: Commands,
     config: Res<SimulationConfig>,
     mut stats: ResMut<ProjectileStatistics>,
     mut consumed: ResMut<ConsumedArmorProjectiles>,
-    projectiles: Query<(Entity, &PreSolveVelocity), With<Projectile>>,
+    projectiles: Query<
+        (
+            Entity,
+            &PreSolveVelocity,
+            &ProjectileTeam,
+            Option<&Position>,
+        ),
+        With<Projectile>,
+    >,
     context: ArmorHitContext,
 ) {
     let projectile_body1 = event.body1.and_then(|body| projectiles.get(body).ok());
     let projectile_body2 = event.body2.and_then(|body| projectiles.get(body).ok());
 
-    let (projectile_entity, incoming) = match (projectile_body1, projectile_body2) {
-        (Some((entity, velocity)), _) | (_, Some((entity, velocity))) => (entity, velocity.0),
-        _ => return,
-    };
+    let (projectile_entity, incoming, ball_team, ball_position) =
+        match (projectile_body1, projectile_body2) {
+            (Some((entity, velocity, team, position)), _)
+            | (_, Some((entity, velocity, team, position))) => {
+                (entity, velocity.0, team.0, position.map(|p| p.0))
+            }
+            _ => return,
+        };
 
     let other_collider = if projectile_body1.is_some() {
         event.collider2
@@ -108,8 +181,15 @@ fn handle_armor_collision(
         event.collider1
     };
 
-    if !context.is_armor(other_collider) {
-        return;
+    match context.armor_team(other_collider) {
+        None => {
+            if context.is_robot_body(other_collider) {
+                consumed.0.insert(projectile_entity);
+            }
+            return;
+        }
+        Some(team) if team == ball_team => return,
+        Some(_) => {}
     }
 
     // Observer commands are deferred, so two plates touched within one physics tick would
@@ -123,10 +203,16 @@ fn handle_armor_collision(
         top: config.armor.hit_angle_top,
         side: config.armor.hit_angle_side,
     };
-    if !context.within_hit_zone(other_collider, &angles, incoming) {
-        // Out of zone: this contact does not count, but the projectile may still hit
-        // another plate legitimately later.
-        consumed.0.remove(&projectile_entity);
+    // The margin absorbs the projectile radius plus contact slop, since avian reports the
+    // solved ball center rather than the surface contact point.
+    let face_margin = config.projectile.diameter * 0.5 + 0.005;
+    if !context.within_hit_zone(
+        other_collider,
+        &angles,
+        incoming,
+        ball_position,
+        face_margin,
+    ) {
         return;
     }
 

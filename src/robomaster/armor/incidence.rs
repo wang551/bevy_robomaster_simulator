@@ -5,6 +5,7 @@
 //! zone: at most `bottom`/`top`/`side` degrees from the hit face around the corresponding
 //! edge, i.e. at most 15°/30°/55° past the plate plane toward the rear of the plate.
 
+use bevy::math::Vec2;
 use bevy::prelude::{Component, Deref, DerefMut, Quat, Vec3};
 
 /// Projectile velocity as it was before this physics tick's contact solving.
@@ -35,6 +36,30 @@ impl ArmorFrame {
             up: rotation * self.up,
             right: rotation * self.right,
         }
+    }
+}
+
+/// Extent of the plate's hit face along the [`ArmorFrame`] right/up axes, measured from the
+/// frame-holding entity's origin at construction time. Only contacts whose surface point
+/// projects inside this rectangle count as hits on the face; anything else (module frame,
+/// rim, ...) is spent without counting.
+///
+/// The scalars are invariant under the world→local rotation, so they are computed in world
+/// space at construction and reused against [`ArmorFrame::rotated_by`] axes at hit time.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct ArmorFaceBounds {
+    /// Rectangle midpoint, `(along right, along up)`.
+    pub center: Vec2,
+    /// Half extents, `(along right, along up)`.
+    pub half: Vec2,
+}
+
+impl ArmorFaceBounds {
+    /// Whether `point` (projected onto the face axes) lies inside the face rectangle grown
+    /// by `margin`, which absorbs the projectile radius and contact slop.
+    pub fn contains(&self, point: Vec2, margin: f32) -> bool {
+        let offset = (point - self.center).abs();
+        offset.x <= self.half.x + margin && offset.y <= self.half.y + margin
     }
 }
 
@@ -225,6 +250,21 @@ mod tests {
             side: 180.0,
         };
         assert!(angles.accepts(&frontal_frame(), incoming_from(Vec3::NEG_Z)));
+    }
+
+    #[test]
+    fn face_bounds_containment_respects_margin() {
+        let bounds = ArmorFaceBounds {
+            center: Vec2::new(0.01, -0.02),
+            half: Vec2::new(0.115, 0.062),
+        };
+        let point = |right: f32, up: f32| Vec2::new(right, up);
+        assert!(bounds.contains(point(0.01, -0.02), 0.0));
+        assert!(bounds.contains(point(0.12, -0.08), 0.0)); // exact corner
+        assert!(!bounds.contains(point(0.13, -0.02), 0.0));
+        // The margin absorbs the projectile radius at the rim.
+        assert!(bounds.contains(point(0.13, -0.02), 0.013));
+        assert!(!bounds.contains(point(0.14, -0.02), 0.013));
     }
 
     #[test]

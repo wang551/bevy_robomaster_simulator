@@ -2,6 +2,13 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+use crate::robomaster::prelude::Team;
+
+/// Team of the robot that launched this projectile; hit counting only accepts
+/// contacts with enemy armor.
+#[derive(Component, Copy, Clone, Debug, Deref)]
+pub struct ProjectileTeam(pub Team);
+
 #[derive(PhysicsLayer, Default, Clone, Copy, Debug)]
 pub enum GameLayer {
     #[default]
@@ -83,6 +90,18 @@ impl GameLayer {
             )
         }
     }
+
+    /// Layers for colliders on a robot's non-armor visual meshes (chassis shell, gimbal
+    /// tower). They exist only so projectiles are absorbed by the body instead of
+    /// ghosting through it, so they interact with nothing but opposing projectiles:
+    /// driving collisions stay on the root body cylinder.
+    pub fn vehicle_obstacle_collision_layers(is_self: bool) -> CollisionLayers {
+        if is_self {
+            CollisionLayers::new(Self::VehicleSelf, [Self::ProjectileOther])
+        } else {
+            CollisionLayers::new(Self::VehicleOther, [Self::ProjectileSelf])
+        }
+    }
 }
 
 #[derive(Component, Deref, DerefMut)]
@@ -153,5 +172,23 @@ mod tests {
 
         assert!(!self_projectile.interacts_with(GameLayer::vehicle_body_collision_layers(false)));
         assert!(!other_projectile.interacts_with(GameLayer::vehicle_body_collision_layers(true)));
+    }
+
+    #[test]
+    fn body_meshes_absorb_only_opposing_projectiles() {
+        let self_obstacle = GameLayer::vehicle_obstacle_collision_layers(true);
+        let other_obstacle = GameLayer::vehicle_obstacle_collision_layers(false);
+        let self_projectile = GameLayer::projectile_collision_layers(true);
+        let other_projectile = GameLayer::projectile_collision_layers(false);
+
+        assert!(self_projectile.interacts_with(other_obstacle));
+        assert!(other_projectile.interacts_with(self_obstacle));
+        assert!(!self_projectile.interacts_with(self_obstacle));
+        assert!(!other_projectile.interacts_with(other_obstacle));
+        // Obstacles take no part in driving physics or armor contacts.
+        assert!(!self_obstacle.interacts_with(other_obstacle));
+        assert!(!self_obstacle.interacts_with(GameLayer::environment_collision_layers()));
+        assert!(!self_obstacle.interacts_with(GameLayer::vehicle_body_collision_layers(false)));
+        assert!(!self_obstacle.interacts_with(GameLayer::vehicle_armor_collision_layers(false)));
     }
 }

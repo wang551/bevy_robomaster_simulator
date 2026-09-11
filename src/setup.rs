@@ -141,6 +141,7 @@ pub fn setup_vehicle(
         Option<&ActiveSlapper>,
     )>,
     sim_config: Res<SimulationConfig>,
+    name: Query<&Name>,
 ) {
     let (root, infantry, is_local, is_active) = root_query
         .get(root)
@@ -186,6 +187,33 @@ pub fn setup_vehicle(
     query.children.iter_descendants(root).for_each(|e| {
         commands.entity(e).insert(vehicle_armor_collision_layers);
     });
+
+    // The gimbal tower gets a collider whose layers admit nothing but opposing
+    // projectiles: shots into the tower are absorbed and spent instead of ghosting
+    // through, while driving physics stays on the root cylinder. Bevy's glTF loader puts
+    // the actual mesh on a child of the named node, so the hierarchy constructor is
+    // required to reach it.
+    //
+    // The chassis shell deliberately stays a ghost: any body collider wrapping the shell
+    // would also swallow hits meant for the armor plates in front of it, and a projectile
+    // that does slip through the shell hits the far plate from the inside, where the
+    // incidence gate already rejects it.
+    let obstacle_layers = GameLayer::vehicle_obstacle_collision_layers(is_local);
+    let obstacle_constructor = || {
+        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMeshWithConfig(
+            TrimeshFlags::MERGE_DUPLICATE_VERTICES,
+        ))
+        .with_default_layers(obstacle_layers)
+    };
+    let Some(tower) = query
+        .children
+        .iter_descendants(root)
+        .find(|e| name.get(*e).is_ok_and(|n| n.as_str() == "GIMBAL_MAIN"))
+    else {
+        warn!("vehicle is missing a 'GIMBAL_MAIN' mesh, projectiles ghost through the gimbal");
+        return;
+    };
+    commands.entity(tower).insert(obstacle_constructor());
 
     let iter = query.of(root).any().exact("VEHICLE").flatten();
     let base = iter.clone().exact("BASE").one().unwrap();

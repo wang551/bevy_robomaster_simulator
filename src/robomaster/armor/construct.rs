@@ -1,7 +1,8 @@
 use crate::config::SimulationConfig;
 use crate::query;
 use crate::robomaster::prelude::{
-    ArmorFrame, ArmorLabel, ArmorSpec, MarkerData, Team, derive_armor_frame, extract_markers,
+    ArmorFaceBounds, ArmorFrame, ArmorLabel, ArmorSpec, MarkerData, Team, derive_armor_frame,
+    extract_markers,
 };
 use crate::util::entity_query::HierarchyQuery;
 use avian3d::prelude::{
@@ -17,7 +18,8 @@ use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::{
     Added, Assets, Changed, ChildOf, Children, Commands, Component, Entity, GlobalTransform, Mesh,
-    Mesh3d, Name, Plugin, Query, Res, ResMut, Resource, Update, Vec3, Visibility, With, info, warn,
+    Mesh3d, Name, Plugin, Query, Res, ResMut, Resource, Update, Vec2, Vec3, Visibility, With, info,
+    warn,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -380,7 +382,8 @@ impl ArmorConstructor<'_, '_> {
 
     /// Derives the plate's hit-face basis (see [`derive_armor_frame`]) and stores it in
     /// the armor collider's local space, so collision handling can rotate it back into
-    /// world space with the collider's transform at hit time.
+    /// world space with the collider's transform at hit time. Also bounds the face region
+    /// from the plate mesh itself, so only contacts on the face count as hits.
     fn attach_armor_frame(
         &mut self,
         armor_entity: Entity,
@@ -413,6 +416,48 @@ impl ArmorConstructor<'_, '_> {
             up: to_local * world.up,
             right: to_local * world.right,
         });
+
+        // Face rectangle in the frame's right/up coordinates, relative to the armor
+        // entity's origin. Invariant under the world→local rotation, so world-space data
+        // at construction time stays valid against rotated axes at hit time.
+        let face_points = self.face_mesh_points(armor_entity);
+        if face_points.is_empty() {
+            warn!(
+                "Armor '{armor_name}': no face mesh found, hits count unfiltered by the face rect"
+            );
+            return;
+        }
+        let origin = armor_transform.translation();
+        let (mut min, mut max) = (Vec2::MAX, Vec2::MIN);
+        for point in &face_points {
+            let rel = *point - origin;
+            let coords = Vec2::new(rel.dot(world.right), rel.dot(world.up));
+            min = min.min(coords);
+            max = max.max(coords);
+        }
+        self.commands.entity(armor_entity).insert(ArmorFaceBounds {
+            center: (min + max) / 2.0,
+            half: (max - min) / 2.0,
+        });
+    }
+
+    /// World-space vertices of the plate-face mesh(es) under `armor_entity`.
+    fn face_mesh_points(&self, armor_entity: Entity) -> Vec<Vec3> {
+        let children = self.children;
+        let mut points = Vec::new();
+        for child in children.iter_descendants(armor_entity) {
+            let Some(mesh) = self.get_mesh(child) else {
+                continue;
+            };
+            let Ok(transform) = self.global_transforms.get(child) else {
+                continue;
+            };
+            let Some(vertices) = extract_vertices(mesh) else {
+                continue;
+            };
+            points.extend(vertices.iter().map(|&p| transform.transform_point(p)));
+        }
+        points
     }
 }
 

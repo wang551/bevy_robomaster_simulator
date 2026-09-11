@@ -1,4 +1,5 @@
 use avian3d::prelude::*;
+use bevy::ecs::system::SystemParam;
 use bevy::input::gamepad::{GamepadRumbleIntensity, GamepadRumbleRequest};
 use bevy::prelude::*;
 use core::{f32::consts::PI, time::Duration};
@@ -6,12 +7,34 @@ use core::{f32::consts::PI, time::Duration};
 use crate::components::{
     Controlled, DartLaunch, DartProjectile, DartSetting, GameLayer, Infantry, InfantryChassis,
     InfantryGimbal, InfantryLaunchOffset, ProjectileCooldown, ProjectileLifetime,
-    ProjectileSetting,
+    ProjectileSetting, ProjectileTeam,
 };
 use crate::config::SimulationConfig;
 use crate::robomaster::prelude::Projectile;
 use crate::statistic::ProjectileStatistics;
 use crate::systems::{ControllerState, request_controller_rumble};
+
+/// Gamepad feedback shared by the launch systems, bundled to keep their argument
+/// counts down.
+#[derive(SystemParam)]
+pub struct LaunchFeedback<'w> {
+    controller: Option<Res<'w, ControllerState>>,
+    rumble_requests: MessageWriter<'w, GamepadRumbleRequest>,
+}
+
+impl LaunchFeedback<'_> {
+    fn rumble(&mut self, strong: f32, weak: f32, duration: Duration) {
+        request_controller_rumble(
+            self.controller.as_deref(),
+            &mut self.rumble_requests,
+            GamepadRumbleIntensity {
+                strong_motor: strong,
+                weak_motor: weak,
+            },
+            duration,
+        );
+    }
+}
 
 pub fn setup_projectile(
     mut commands: Commands,
@@ -42,11 +65,10 @@ pub fn projectile_launch(
     config: Res<SimulationConfig>,
     _asset_server: Res<AssetServer>,
     mut commands: Commands,
-    controller: Option<Res<ControllerState>>,
-    mut rumble_requests: MessageWriter<GamepadRumbleRequest>,
+    mut feedback: LaunchFeedback,
     setting: Res<ProjectileSetting>,
     infantry: Single<
-        (&Transform, &LinearVelocity, &AngularVelocity),
+        (&Transform, &LinearVelocity, &AngularVelocity, &Infantry),
         (With<Infantry>, With<Controlled>),
     >,
     gimbal: Single<
@@ -88,17 +110,10 @@ pub fn projectile_launch(
             config.projectile.lifetime,
             TimerMode::Once,
         )),
+        ProjectileTeam(infantry.3.team),
         Projectile,
     ));
-    request_controller_rumble(
-        controller.as_deref(),
-        &mut rumble_requests,
-        GamepadRumbleIntensity {
-            strong_motor: 0.45,
-            weak_motor: 0.2,
-        },
-        Duration::from_millis(80),
-    );
+    feedback.rumble(0.45, 0.2, Duration::from_millis(80));
 }
 
 pub fn projectile_aerodynamics(
@@ -138,10 +153,10 @@ pub fn dart_launch(
     mut commands: Commands,
     config: Res<SimulationConfig>,
     mut stats: ResMut<ProjectileStatistics>,
-    controller: Option<Res<ControllerState>>,
-    mut rumble_requests: MessageWriter<GamepadRumbleRequest>,
+    mut feedback: LaunchFeedback,
     setting: Res<DartSetting>,
     launchers: Query<&GlobalTransform, With<DartLaunch>>,
+    owner: Single<&Infantry, With<Controlled>>,
 ) {
     const DART_FORWARD: Vec3 = Vec3::Y;
     const DART_MODEL_FORWARD: Vec3 = Vec3::NEG_Y;
@@ -194,18 +209,11 @@ pub fn dart_launch(
             config.projectile.lifetime,
             TimerMode::Once,
         )),
+        ProjectileTeam(owner.team),
         Projectile,
         DartProjectile,
     ));
-    request_controller_rumble(
-        controller.as_deref(),
-        &mut rumble_requests,
-        GamepadRumbleIntensity {
-            strong_motor: 0.65,
-            weak_motor: 0.35,
-        },
-        Duration::from_millis(140),
-    );
+    feedback.rumble(0.65, 0.35, Duration::from_millis(140));
 }
 
 pub fn cleanup_projectiles(
