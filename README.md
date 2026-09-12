@@ -53,7 +53,7 @@
 
 #### 🔌 通信接口集成
 
-* **ROS2 原生集成** - 发布 `/image_raw`、`/camera_info`、`/tf` 等话题，订阅 `/armor_solver/cmd_gimbal`
+* **ROS2 原生集成** - 发布 `/image_raw`、`/camera_info`、`/tf` 等话题，订阅 `/rm_gimbal/cmd`
 * **Talos 共享内存 IPC** - 与 C++ talos-cpp 零拷贝通信，发布 odom/gimbal/muzzle/camera 姿势，订阅云台控制命令
 
 #### 📊 工具与接口
@@ -86,6 +86,8 @@
 ## 💡 使用说明
 
 ### ROS2 接口
+
+> 📘 基于此接口开发自瞄代码的完整指南（话题/坐标系/控制协议/弹道模型/Python & C++ 骨架模板）见 **[docs/ros2-autoaim.md](docs/ros2-autoaim.md)**。
 
 **发布话题**
 

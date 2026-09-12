@@ -9,7 +9,7 @@ Daedalus 启动脚本（Windows）
   .\run.ps1 -Check              只设置并检查环境，不启动模拟器
   .\run.ps1 --bin daedalus ...  额外参数原样传给 cargo run
 
-脚本会自动完成（原理见 BUILD.md 坑位 1/7）：
+脚本会自动完成（原理见 docs/build.md 坑位 1/7）：
   - 用 vswhere 定位 MSVC 工具集，rustup 与 MSVC link.exe 顶到 PATH 最前，
     防止 pixi 环境的 rust 1.93 / coreutils link.exe 遮蔽
   - ros2 模式下叠加 ROS2 前缀、rm_interfaces overlay、conda 运行库 DLL 目录，
@@ -47,7 +47,7 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$MsvcBin;$env:PATH"
 if ($Mode -eq "ros2") {
     if (-not (Test-Path $RosEnv)) { throw "ROS2 环境不存在: $RosEnv（用 -RosEnv 另行指定）" }
     if (-not (Test-Path (Join-Path $Overlay "share"))) {
-        throw "overlay 缺失: $Overlay`n请先按 BUILD.md 用 colcon 构建 rm_interfaces 并重跑本脚本"
+        throw "overlay 缺失: $Overlay`n请先按 docs/build.md 用 colcon 构建 rm_interfaces 并重跑本脚本"
     }
     $pixiBin = Join-Path $RosEnv ".pixi\envs\default\Library\bin"
     $env:ROS_DISTRO = "lyrical"   # 必须是 lyrical：r2r 0.9.6 的 ManualByNode 门控为 not(lyrical)
@@ -65,7 +65,7 @@ if ($Mode -eq "ros2") {
 $cargoSrc = (Get-Command cargo -ErrorAction Stop).Source
 $rustcVer = ((& rustc --version) -split ' ')[1]
 if ($rustcVer -lt [version]"1.95.0") {
-    throw "rustc $rustcVer < 1.95.0（bevy 0.19 要求）。cargo 解析到 $cargoSrc — 若在 pixi 环境里启动，检查 PATH 遮蔽（BUILD.md 坑位 7），或先 rustup update"
+    throw "rustc $rustcVer < 1.95.0（bevy 0.19 要求）。cargo 解析到 $cargoSrc — 若在 pixi 环境里启动，检查 PATH 遮蔽（docs/build.md 坑位 7），或先 rustup update"
 }
 $linkSrc = (Get-Command link.exe -ErrorAction SilentlyContinue).Source
 
