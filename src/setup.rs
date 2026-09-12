@@ -188,32 +188,46 @@ pub fn setup_vehicle(
         commands.entity(e).insert(vehicle_armor_collision_layers);
     });
 
-    // The gimbal tower gets a collider whose layers admit nothing but opposing
-    // projectiles: shots into the tower are absorbed and spent instead of ghosting
-    // through, while driving physics stays on the root cylinder. Bevy's glTF loader puts
-    // the actual mesh on a child of the named node, so the hierarchy constructor is
-    // required to reach it.
+    // The gimbal tower and chassis shell get colliders whose layers admit nothing but
+    // opposing projectiles: shots into the body are absorbed and spent instead of
+    // ghosting through, while driving physics stays on the root cylinder. Bevy's glTF
+    // loader puts the actual mesh on a child of the named node, so the hierarchy
+    // constructor is required to reach it.
     //
-    // The chassis shell deliberately stays a ghost: any body collider wrapping the shell
-    // would also swallow hits meant for the armor plates in front of it, and a projectile
-    // that does slip through the shell hits the far plate from the inside, where the
-    // incidence gate already rejects it.
+    // The colliders are convex decompositions, not trimeshes: a fast projectile that
+    // tunnels into a large closed trimesh explodes the contact-pair manifold count and
+    // trips avian 0.7's stale-manifold index panic in `prepare_contact_constraints`
+    // (seen 2026-09-11 with a chassis shell, 2026-09-12 with the tower trimesh).
+    // Convex parts only ever produce single-manifold contacts.
+    //
+    // The armor plates sit proud of the chassis shell on every robot model (verified by
+    // raycasting `tools/chassis_armor_occlusion.py`), so face hits still reach the
+    // plates; a rim contact that touches shell and plate in the same physics step is
+    // resolved in the armor's favor in `armor::collision`.
     let obstacle_layers = GameLayer::vehicle_obstacle_collision_layers(is_local);
     let obstacle_constructor = || {
-        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMeshWithConfig(
-            TrimeshFlags::MERGE_DUPLICATE_VERTICES,
-        ))
+        ColliderConstructorHierarchy::new(
+            ColliderConstructor::ConvexDecompositionFromMeshWithConfig(VhacdParameters {
+                max_convex_hulls: 64,
+                ..VhacdParameters::default()
+            }),
+        )
         .with_default_layers(obstacle_layers)
     };
-    let Some(tower) = query
-        .children
-        .iter_descendants(root)
-        .find(|e| name.get(*e).is_ok_and(|n| n.as_str() == "GIMBAL_MAIN"))
-    else {
-        warn!("vehicle is missing a 'GIMBAL_MAIN' mesh, projectiles ghost through the gimbal");
-        return;
-    };
-    commands.entity(tower).insert(obstacle_constructor());
+    for (node, part) in [
+        ("CHASSIS", "chassis shell"),
+        ("GIMBAL_MAIN", "gimbal tower"),
+    ] {
+        let Some(entity) = query
+            .children
+            .iter_descendants(root)
+            .find(|e| name.get(*e).is_ok_and(|n| n.as_str() == node))
+        else {
+            warn!("vehicle is missing a '{node}' mesh, projectiles ghost through the {part}");
+            continue;
+        };
+        commands.entity(entity).insert(obstacle_constructor());
+    }
 
     let iter = query.of(root).any().exact("VEHICLE").flatten();
     let base = iter.clone().exact("BASE").one().unwrap();

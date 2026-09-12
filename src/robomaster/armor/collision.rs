@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::sync::Once;
 
 use super::construct::Armor;
-use super::incidence::{ArmorFaceBounds, ArmorFrame, ArmorHitAngles, PreSolveVelocity};
+use super::incidence::{ArmorFaceBounds, ArmorFrame, ArmorHitAngle, PreSolveVelocity};
 use crate::components::Infantry;
 use crate::components::ProjectileTeam;
 use crate::config::SimulationConfig;
@@ -39,6 +39,25 @@ fn cache_projectile_pre_solve_velocity(
 
 #[derive(Resource, Default)]
 struct ConsumedArmorProjectiles(HashSet<Entity>);
+
+/// Robot-body (chassis shell, gimbal tower) contacts waiting to be spent at the end of
+/// the physics step. Spending is deferred so that a projectile which starts touching
+/// the shell and an armor plate within the same step still counts on the plate: near
+/// plate rims both contacts can begin in one step, and the shell event must not eat the
+/// plate hit. An armor contact of its own never lands here, so ricochets off the body
+/// onto a plate in a later step stay uncounted, as before.
+#[derive(Resource, Default)]
+struct BodyTouchedProjectiles(HashSet<Entity>);
+
+/// Promotes this step's body contacts into spent projectiles. Runs after
+/// `PhysicsStepSystems::Finalize`, where avian synchronously triggers the collision
+/// observers, so every same-step armor contact has already been processed.
+fn spend_body_touched_projectiles(
+    mut consumed: ResMut<ConsumedArmorProjectiles>,
+    mut body_touched: ResMut<BodyTouchedProjectiles>,
+) {
+    consumed.0.extend(body_touched.0.drain());
+}
 
 fn cleanup_consumed_armor_projectiles(
     mut consumed: ResMut<ConsumedArmorProjectiles>,
@@ -104,7 +123,7 @@ impl ArmorHitContext<'_, '_> {
     fn within_hit_zone(
         &self,
         collider: Entity,
-        angles: &ArmorHitAngles,
+        angle: &ArmorHitAngle,
         incoming: Vec3,
         ball_position: Option<Vec3>,
         face_margin: f32,
@@ -120,7 +139,7 @@ impl ArmorHitContext<'_, '_> {
                         return false;
                     }
                 }
-                return angles.accepts(&world, incoming);
+                return angle.accepts(&world, incoming);
             }
             entity = self
                 .child_of
@@ -143,8 +162,9 @@ impl ArmorHitContext<'_, '_> {
 /// - enemy armor in zone: counts;
 /// - enemy armor out of zone: spent without counting (otherwise a ball ghosting through
 ///   the chassis would register on whatever armor happens to be behind it);
-/// - a robot's non-armor body (gimbal structure, chassis mesh): spent as well, so a
-///   ricochet off the body onto a plate afterwards does not register;
+/// - a robot's non-armor body (chassis shell, gimbal tower): spent as well once the
+///   step ends, so a ricochet off the body onto a plate in a later step does not
+///   register - but a plate touched in the same step still counts first;
 /// - friendly armor and the environment are ignored and never consume the projectile.
 fn handle_armor_collision(
     event: On<CollisionStart>,
@@ -152,6 +172,7 @@ fn handle_armor_collision(
     config: Res<SimulationConfig>,
     mut stats: ResMut<ProjectileStatistics>,
     mut consumed: ResMut<ConsumedArmorProjectiles>,
+    mut body_touched: ResMut<BodyTouchedProjectiles>,
     projectiles: Query<
         (
             Entity,
@@ -184,7 +205,7 @@ fn handle_armor_collision(
     match context.armor_team(other_collider) {
         None => {
             if context.is_robot_body(other_collider) {
-                consumed.0.insert(projectile_entity);
+                body_touched.0.insert(projectile_entity);
             }
             return;
         }
@@ -198,21 +219,13 @@ fn handle_armor_collision(
         return;
     }
 
-    let angles = ArmorHitAngles {
-        bottom: config.armor.hit_angle_bottom,
-        top: config.armor.hit_angle_top,
-        side: config.armor.hit_angle_side,
+    let angle = ArmorHitAngle {
+        max: config.armor.hit_angle_max,
     };
     // The margin absorbs the projectile radius plus contact slop, since avian reports the
     // solved ball center rather than the surface contact point.
     let face_margin = config.projectile.diameter * 0.5 + 0.005;
-    if !context.within_hit_zone(
-        other_collider,
-        &angles,
-        incoming,
-        ball_position,
-        face_margin,
-    ) {
+    if !context.within_hit_zone(other_collider, &angle, incoming, ball_position, face_margin) {
         return;
     }
 
@@ -229,9 +242,14 @@ pub(super) struct ArmorCollisionPlugin;
 impl Plugin for ArmorCollisionPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.init_resource::<ConsumedArmorProjectiles>()
+            .init_resource::<BodyTouchedProjectiles>()
             .add_systems(
                 PhysicsSchedule,
                 cache_projectile_pre_solve_velocity.in_set(PhysicsStepSystems::First),
+            )
+            .add_systems(
+                PhysicsSchedule,
+                spend_body_touched_projectiles.in_set(PhysicsStepSystems::Last),
             )
             .add_systems(Update, cleanup_consumed_armor_projectiles)
             .add_observer(handle_armor_collision);

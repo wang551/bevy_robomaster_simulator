@@ -380,24 +380,22 @@ impl Default for RosPublishConfig {
     }
 }
 
-/// Armor hit-incidence limits in degrees, measured from the hit face around the
-/// corresponding edge (RoboMaster rule: 受击打面下边缘 105°内、上边缘 120°内、左右边缘 145°内
-/// 不得被遮挡). Projectiles arriving from outside that zone do not count as hits;
-/// 180 or above disables an edge's limit. Hot-reloadable.
+/// Armor hit-incidence limit in degrees, measured between the incoming projectile
+/// direction and the plate's outward normal: the judge system's force sensors respond
+/// to the normal impulse component, so grazing arrivals beyond this angle are spent
+/// without counting. (The construction-spec figures 105/120/145° are occlusion keep-out
+/// zones restricting the robot's own structure, not the projectile's direction.)
+/// 180 or above accepts every direction. Hot-reloadable.
 #[derive(Deserialize, Reflect, Clone)]
 #[serde(default)]
 pub struct ArmorConfig {
-    pub hit_angle_bottom: f32,
-    pub hit_angle_top: f32,
-    pub hit_angle_side: f32,
+    pub hit_angle_max: f32,
 }
 
 impl Default for ArmorConfig {
     fn default() -> Self {
         Self {
-            hit_angle_bottom: 105.0,
-            hit_angle_top: 120.0,
-            hit_angle_side: 145.0,
+            hit_angle_max: 75.0,
         }
     }
 }

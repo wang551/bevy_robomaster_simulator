@@ -1,9 +1,14 @@
 //! Hit-incidence gating for armor plates.
 //!
-//! RoboMaster rule: 装甲模块受击打面下边缘 105°内、上边缘 120°内、左右边缘 145°内不得被遮挡.
-//! A projectile therefore only counts as a hit when its incoming direction lies inside that
-//! zone: at most `bottom`/`top`/`side` degrees from the hit face around the corresponding
-//! edge, i.e. at most 15°/30°/55° past the plate plane toward the rear of the plate.
+//! The judge system registers hits through the armor's force sensors, which respond to
+//! the normal component of the contact impulse: a projectile grazing along the plate
+//! face delivers almost no normal force and does not register. The gate therefore
+//! bounds the angle between the incoming direction and the plate's outward normal.
+//!
+//! The RoboMaster construction-spec figures 105°/120°/145° are occlusion keep-out
+//! zones around the plate edges ("受击打面下边缘 105°内不得被遮挡" restricts the robot's
+//! own structure, not the projectile's arrival direction) and are deliberately NOT
+//! used as incidence limits here.
 
 use bevy::math::Vec2;
 use bevy::prelude::{Component, Deref, DerefMut, Quat, Vec3};
@@ -63,52 +68,34 @@ impl ArmorFaceBounds {
     }
 }
 
-/// Per-edge angular limits in degrees, measured from the hit face around the corresponding
-/// edge, as in the rule text. Values of 180 or above disable an edge's limit.
+/// Maximum angle in degrees between the incoming projectile direction and the plate's
+/// outward normal for a contact to count as a hit. The default of 75° matches the
+/// incidence the construction spec uses when testing armor modules; arrivals beyond it
+/// (grazing along the face, from behind, ...) are spent without counting. Values of
+/// 180 or above accept every direction.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ArmorHitAngles {
-    pub bottom: f32,
-    pub top: f32,
-    pub side: f32,
+pub struct ArmorHitAngle {
+    pub max: f32,
 }
 
-impl Default for ArmorHitAngles {
+impl Default for ArmorHitAngle {
     fn default() -> Self {
-        Self {
-            bottom: 105.0,
-            top: 120.0,
-            side: 145.0,
-        }
+        Self { max: 75.0 }
     }
 }
 
-impl ArmorHitAngles {
+impl ArmorHitAngle {
     /// Returns `true` when a projectile arriving with `incoming_velocity` hits a plate
-    /// whose world-space basis is `frame` from within the rule's angular zone.
+    /// whose world-space basis is `frame` from within `max` degrees of the face normal.
     pub fn accepts(&self, frame: &ArmorFrame, incoming_velocity: Vec3) -> bool {
         // Direction from the plate toward the shooter.
         let Some(incoming) = (-incoming_velocity).try_normalize() else {
             return true; // Degenerate (resting) contact: keep counting the touch.
         };
-        let (sr, su, sn) = (
-            incoming.dot(frame.right),
-            incoming.dot(frame.up),
-            incoming.dot(frame.normal),
-        );
-        // Each edge's zone is a half space bounded by a plane tilted `rule - 90°` past the
-        // plate plane around that edge; the shooter direction must lie in at least one of
-        // the four zones. Frontal directions satisfy all of them.
-        let in_sector = |rule_deg: f32, toward_edge: f32| {
-            if rule_deg >= 180.0 {
-                return true;
-            }
-            let margin = (rule_deg - 90.0).to_radians();
-            sn * margin.cos() + toward_edge * margin.sin() >= 0.0
-        };
-        in_sector(self.bottom, -su)
-            || in_sector(self.top, su)
-            || in_sector(self.side, sr)
-            || in_sector(self.side, -sr)
+        if self.max >= 180.0 {
+            return true;
+        }
+        incoming.dot(frame.normal) >= self.max.to_radians().cos()
     }
 }
 
@@ -170,86 +157,81 @@ mod tests {
         (actual - expected).length() < 1e-5
     }
 
-    /// Shooter direction `past_plane_deg` past the plate plane toward the rear, rotated
-    /// away from the normal toward in-plane direction `tilt` (unit, e.g. ±Y/±X).
-    /// 0° lies in the plate plane, 90° is straight behind the plate.
-    fn shooter_dir(past_plane_deg: f32, tilt: Vec3) -> Vec3 {
-        let past = past_plane_deg.to_radians();
-        (tilt * past.cos() - Vec3::Z * past.sin()).normalize()
+    /// Shooter direction `deg_from_normal` away from the plate normal (+Z), rotated in
+    /// the plate plane toward `tilt` (unit, e.g. ±Y/±X). 0° is head-on, 90° lies in the
+    /// plate plane, 180° is straight behind the plate.
+    fn front_dir(deg_from_normal: f32, tilt: Vec3) -> Vec3 {
+        let a = deg_from_normal.to_radians();
+        (Vec3::Z * a.cos() + tilt * a.sin()).normalize()
     }
 
     #[test]
-    fn frontal_and_grazing_hits_count() {
-        let angles = ArmorHitAngles::default();
+    fn frontal_and_moderately_tilted_hits_count() {
+        let angle = ArmorHitAngle::default();
         let frame = frontal_frame();
-        // Straight frontal.
-        assert!(angles.accepts(&frame, incoming_from(Vec3::Z)));
-        // Frontal hemisphere at 45° up and 80° down.
-        assert!(angles.accepts(
-            &frame,
-            incoming_from((Vec3::Z * 1.0 + Vec3::Y * 1.0).normalize())
-        ));
-        assert!(angles.accepts(
-            &frame,
-            incoming_from((Vec3::Z + Vec3::NEG_Y * 5.7).normalize())
-        ));
-        // Grazing along the face (in-plane, 90° around an edge): inside every limit.
-        assert!(angles.accepts(&frame, incoming_from(Vec3::Y)));
-        assert!(angles.accepts(&frame, incoming_from(Vec3::NEG_Y)));
-        assert!(angles.accepts(&frame, incoming_from(Vec3::X)));
+        // Head-on and at 45° toward each edge family.
+        assert!(angle.accepts(&frame, incoming_from(Vec3::Z)));
+        assert!(angle.accepts(&frame, incoming_from(front_dir(45.0, Vec3::Y))));
+        assert!(angle.accepts(&frame, incoming_from(front_dir(45.0, Vec3::X))));
+        // Just inside the limit still counts (74.9 rather than 75.0: the boundary
+        // comparison is `>=`, and f32 normalization of the test direction would make an
+        // exact-limit assertion knife-edge).
+        assert!(angle.accepts(&frame, incoming_from(front_dir(74.9, Vec3::Y))));
+    }
+
+    /// The reported bug: shots arriving almost parallel to the plate face used to count,
+    /// because the four per-edge half-space zones unioned into "anything but the rear" -
+    /// every in-plane direction satisfied at least one of them.
+    #[test]
+    fn nearly_parallel_incidence_is_rejected_in_every_direction() {
+        let angle = ArmorHitAngle::default();
+        let frame = frontal_frame();
+        for tilt in [Vec3::Y, Vec3::NEG_Y, Vec3::X, Vec3::NEG_X] {
+            // Exactly in the plate plane (90°) and just past the limit (80°).
+            assert!(
+                !angle.accepts(&frame, incoming_from(front_dir(90.0, tilt))),
+                "in-plane {tilt:?}"
+            );
+            assert!(
+                !angle.accepts(&frame, incoming_from(front_dir(80.0, tilt))),
+                "80 deg {tilt:?}"
+            );
+            // Just inside the limit: must still count.
+            assert!(
+                angle.accepts(&frame, incoming_from(front_dir(70.0, tilt))),
+                "70 deg {tilt:?}"
+            );
+        }
     }
 
     #[test]
     fn behind_hits_rejected() {
-        let angles = ArmorHitAngles::default();
+        let angle = ArmorHitAngle::default();
         let frame = frontal_frame();
-        assert!(!angles.accepts(&frame, incoming_from(Vec3::NEG_Z)));
+        // Straight behind, and just past the plate plane toward the rear.
+        assert!(!angle.accepts(&frame, incoming_from(Vec3::NEG_Z)));
+        assert!(!angle.accepts(&frame, incoming_from(front_dir(100.0, Vec3::NEG_Y))));
     }
 
     #[test]
-    fn bottom_edge_zone_is_105_degrees() {
-        let angles = ArmorHitAngles::default();
+    fn limit_is_tunable() {
+        let strict = ArmorHitAngle { max: 60.0 };
         let frame = frontal_frame();
-        // 10° below-behind: inside the 15° margin past the plane.
-        assert!(angles.accepts(&frame, incoming_from(shooter_dir(10.0, Vec3::NEG_Y))));
-        // 20° below-behind: outside.
-        assert!(!angles.accepts(&frame, incoming_from(shooter_dir(20.0, Vec3::NEG_Y))));
-    }
-
-    #[test]
-    fn top_edge_zone_is_120_degrees() {
-        let angles = ArmorHitAngles::default();
-        let frame = frontal_frame();
-        assert!(angles.accepts(&frame, incoming_from(shooter_dir(25.0, Vec3::Y))));
-        assert!(!angles.accepts(&frame, incoming_from(shooter_dir(35.0, Vec3::Y))));
-    }
-
-    #[test]
-    fn side_edge_zone_is_145_degrees() {
-        let angles = ArmorHitAngles::default();
-        let frame = frontal_frame();
-        assert!(angles.accepts(&frame, incoming_from(shooter_dir(50.0, Vec3::X))));
-        assert!(!angles.accepts(&frame, incoming_from(shooter_dir(60.0, Vec3::X))));
-        // Symmetric on the other side.
-        assert!(angles.accepts(&frame, incoming_from(shooter_dir(50.0, Vec3::NEG_X))));
-        assert!(!angles.accepts(&frame, incoming_from(shooter_dir(60.0, Vec3::NEG_X))));
+        assert!(strict.accepts(&frame, incoming_from(front_dir(55.0, Vec3::Y))));
+        assert!(!strict.accepts(&frame, incoming_from(front_dir(65.0, Vec3::Y))));
     }
 
     #[test]
     fn degenerate_velocity_still_counts() {
-        let angles = ArmorHitAngles::default();
+        let angle = ArmorHitAngle::default();
         let frame = frontal_frame();
-        assert!(angles.accepts(&frame, Vec3::ZERO));
+        assert!(angle.accepts(&frame, Vec3::ZERO));
     }
 
     #[test]
-    fn limits_of_180_disable_the_check() {
-        let angles = ArmorHitAngles {
-            bottom: 180.0,
-            top: 180.0,
-            side: 180.0,
-        };
-        assert!(angles.accepts(&frontal_frame(), incoming_from(Vec3::NEG_Z)));
+    fn limit_of_180_disables_the_check() {
+        let angle = ArmorHitAngle { max: 180.0 };
+        assert!(angle.accepts(&frontal_frame(), incoming_from(Vec3::NEG_Z)));
     }
 
     #[test]
