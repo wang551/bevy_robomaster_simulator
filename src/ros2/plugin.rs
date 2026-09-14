@@ -2,7 +2,7 @@ use crate::arc_mutex;
 use crate::capture::CaptureSource;
 use crate::capture::driver::{CaptureConfig, CapturedFrameKind};
 use crate::components::{
-    Controlled, InfantryChassis, InfantryGimbal, InfantryLaunchOffset, SubscribeAutoAim,
+    Controlled, InfantryChassis, InfantryGimbal, InfantryLaunchOffset, NavCmdVel, SubscribeAutoAim,
 };
 use crate::config::SimulationConfig;
 use crate::robomaster::prelude::{
@@ -57,6 +57,9 @@ struct TechCoreStateRateLimiter(AverageRateLimiter);
 
 #[derive(Resource, Deref, DerefMut)]
 struct CmdLogRateLimiter(AverageRateLimiter);
+
+#[derive(Resource, Deref, DerefMut)]
+struct CmdVelLogRateLimiter(AverageRateLimiter);
 
 macro_rules! tf_tree {
     (stamp: $stamp:expr;$root:literal { $($content:tt)* }) => {{
@@ -349,6 +352,32 @@ fn process_subscription(
     }
 }
 
+fn process_cmd_vel(
+    time: Res<Time>,
+    cmd_vel: ResMut<TopicSubscriber<CmdVelTopic>>,
+    mut nav: ResMut<NavCmdVel>,
+    mut log_limiter: ResMut<CmdVelLogRateLimiter>,
+) {
+    log_limiter.tick(time.delta());
+    loop {
+        let Ok(Some(cmd)) = cmd_vel.try_recv() else {
+            return;
+        };
+        // Same 2Hz echo pattern as the GimbalCmd diagnostic so commanded vs
+        // observed chassis motion can be diffed live without capping FPS.
+        if log_limiter.allow() {
+            info!(
+                "[ROS2] cmd_vel linear=({:.3}, {:.3}) angular.z={:.3}",
+                cmd.linear.x, cmd.linear.y, cmd.angular.z
+            );
+        }
+        nav.update(
+            Vec2::new(cmd.linear.x as f32, cmd.linear.y as f32),
+            cmd.angular.z as f32,
+        );
+    }
+}
+
 fn publish_tech_core_state(
     time: Res<Time>,
     clock: Res<RoboMasterClock>,
@@ -445,6 +474,7 @@ impl Plugin for ROS2Plugin {
             .insert_resource(FireRateLimiter(AverageRateLimiter::from_hz(10.0)))
             .insert_resource(TechCoreStateRateLimiter(AverageRateLimiter::from_hz(20.0)))
             .insert_resource(CmdLogRateLimiter(AverageRateLimiter::from_hz(2.0)))
+            .insert_resource(CmdVelLogRateLimiter(AverageRateLimiter::from_hz(2.0)))
             .add_plugins(RosCapturePlugin {
                 config: color_capture_config,
                 context: RosCaptureContext {
@@ -468,6 +498,7 @@ impl Plugin for ROS2Plugin {
                 process_subscription
                     .run_if(|enabled: Res<SubscribeAutoAim>| enabled.load(Ordering::Acquire)),
             )
+            .add_systems(Update, process_cmd_vel)
             .add_systems(Update, capture_rune.after(TransformSystems::Propagate))
             .add_systems(Update, publish_tech_core_state)
             .insert_resource(SpinThreadHandle(Some(thread::spawn(move || {

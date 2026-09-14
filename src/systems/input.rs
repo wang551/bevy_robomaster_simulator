@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use std::sync::atomic::Ordering;
 
 use crate::components::{
-    ActiveSlapper, Controlled, Infantry, InfantryChassis, InfantryGimbal, SlapperInfantry,
-    SubscribeAutoAim,
+    ActiveSlapper, Controlled, Infantry, InfantryChassis, InfantryGimbal, NavCmdVel,
+    SlapperInfantry, SubscribeAutoAim,
 };
 use crate::config::SimulationConfig;
 use crate::robomaster::vehicle::movement::VehicleDynamic;
@@ -55,17 +55,26 @@ fn move_towards(current: f32, target: f32, max_delta: f32) -> f32 {
     current + (target - current).clamp(-max_delta, max_delta)
 }
 
+/// Convert a REP-103 body-frame velocity (x forward, y left, m/s) into a
+/// world XZ velocity using the chassis (base_link) orientation.
+fn nav_world_velocity(chassis_global: &GlobalTransform, linear: Vec2) -> Vec3 {
+    let forward = chassis_global.forward().with_y(0.0).normalize_or_zero();
+    let right = chassis_global.right().with_y(0.0).normalize_or_zero();
+    forward * linear.x - right * linear.y
+}
+
 pub fn vehicle_controls(
     time: Res<Time>,
     controller: Res<ControllerState>,
     config: Res<SimulationConfig>,
+    nav: Res<NavCmdVel>,
     infantry: Single<(Forces, &Mass, &mut VehicleDynamic), (With<Infantry>, With<Controlled>)>,
     gimbal: Single<
         (&GlobalTransform, &InfantryGimbal),
         (With<Controlled>, Without<InfantryChassis>),
     >,
     chassis: Single<
-        (&mut Transform, &mut InfantryChassis),
+        (&GlobalTransform, &mut Transform, &mut InfantryChassis),
         (
             With<Controlled>,
             Without<InfantryGimbal>,
@@ -81,6 +90,40 @@ pub fn vehicle_controls(
     let (mut forces, &Mass(mass), mut dynamic) = infantry.into_inner();
 
     let dt = time.delta_secs();
+    let (chassis_global, mut chassis_transform, mut chassis_data) = chassis.into_inner();
+
+    // /cmd_vel navigation owns the chassis while its command is fresh (and
+    // brakes to a stop after loss, see NavCmdVel::active_target); manual input
+    // is bypassed entirely during that time.
+    if let Some((linear, angular_z)) =
+        nav.active_target(forces.linear_velocity().length(), chassis_data.yaw_velocity)
+    {
+        let target =
+            nav_world_velocity(chassis_global, linear).clamp_length_max(config.vehicle.max_speed);
+        let dv_xz = (target.xz() - forces.linear_velocity().xz())
+            .clamp_length_max(config.vehicle.linear_acceleration * dt);
+        forces.apply_linear_impulse(Vec3::new(dv_xz.x, 0.0, dv_xz.y) * mass);
+
+        let rotation_speed = config.vehicle.rotation_speed;
+        let yaw_input = if rotation_speed > f32::EPSILON {
+            (angular_z / rotation_speed).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        update_chassis_rotation(
+            &mut chassis_transform,
+            &mut chassis_data,
+            yaw_input,
+            0.0,
+            0.0,
+            rotation_speed,
+            config.vehicle.yaw_acceleration,
+            config.vehicle.tilt_rotation_speed,
+            dt,
+        );
+        return;
+    }
+
     dynamic.linear(
         &mut forces,
         mass,
@@ -90,7 +133,6 @@ pub fn vehicle_controls(
         boost,
     );
 
-    let (mut chassis_transform, mut chassis_data) = chassis.into_inner();
     update_chassis_rotation(
         &mut chassis_transform,
         &mut chassis_data,
@@ -367,5 +409,55 @@ mod tests {
         let (_, pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
         assert!((roll + CHASSIS_TILT_LIMIT).abs() < 1e-5);
         assert!((pitch - CHASSIS_TILT_LIMIT).abs() < 1e-5);
+    }
+
+    #[test]
+    fn nav_cmd_vel_is_inactive_until_first_command() {
+        let nav = NavCmdVel::default();
+        assert_eq!(nav.active_target(0.0, 0.0), None);
+        // even a fast-moving chassis is left to manual control before any
+        // command ever arrived
+        assert_eq!(nav.active_target(5.0, 1.0), None);
+    }
+
+    #[test]
+    fn nav_cmd_vel_fresh_command_is_passed_through() {
+        let mut nav = NavCmdVel::default();
+        nav.update(Vec2::new(1.0, -0.5), 0.7);
+        assert_eq!(
+            nav.active_target(0.0, 0.0),
+            Some((Vec2::new(1.0, -0.5), 0.7))
+        );
+    }
+
+    #[test]
+    fn nav_cmd_vel_stale_command_brakes_then_releases() {
+        let mut nav = NavCmdVel::default();
+        nav.update(Vec2::new(2.0, 0.0), 1.0);
+        nav.age_last_command(NavCmdVel::TIMEOUT + std::time::Duration::from_millis(50));
+
+        // still rolling/spinning → target zero so the chassis brakes actively
+        assert_eq!(nav.active_target(5.0, 0.0), Some((Vec2::ZERO, 0.0)));
+        assert_eq!(nav.active_target(0.0, 0.3), Some((Vec2::ZERO, 0.0)));
+
+        // stopped → hand control back to manual input
+        assert_eq!(nav.active_target(0.01, 0.0), None);
+    }
+
+    #[test]
+    fn nav_world_velocity_maps_ros_body_frame_to_world() {
+        // identity chassis: forward = -Z, right = +X, so ROS y (left) = -X
+        let gt = GlobalTransform::from(Transform::default());
+        assert_eq!(nav_world_velocity(&gt, Vec2::X), -Vec3::Z);
+        assert_eq!(nav_world_velocity(&gt, Vec2::Y), -Vec3::X);
+
+        // 90° CCW chassis yaw: forward = -X, left = +Z
+        let gt = GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_y(
+            std::f32::consts::FRAC_PI_2,
+        )));
+        let forward = nav_world_velocity(&gt, Vec2::X);
+        assert!((forward - Vec3::new(-1.0, 0.0, 0.0)).length() < 1e-5);
+        let left = nav_world_velocity(&gt, Vec2::Y);
+        assert!((left - Vec3::new(0.0, 0.0, 1.0)).length() < 1e-5);
     }
 }

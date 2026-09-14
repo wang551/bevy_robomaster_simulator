@@ -4,7 +4,7 @@ use bevy::tasks::futures_lite::StreamExt;
 use bevy::tasks::futures_lite::future::block_on;
 use futures::channel::mpsc;
 use futures::channel::mpsc::{Sender, TryRecvError};
-use r2r::geometry_msgs::msg::PoseStamped;
+use r2r::geometry_msgs::msg::{PoseStamped, Twist};
 use r2r::rm_interfaces::msg::GimbalCmd;
 use r2r::sensor_msgs::msg::{CameraInfo, CompressedImage, Image, PointCloud2};
 use r2r::std_msgs::msg::String as RosString;
@@ -94,7 +94,7 @@ fn publisher<T: RosTopic>(node: &mut Node, signal: Arc<AtomicBool>) -> TopicPubl
 macro_rules! subscriber {
     ($signal:expr, $app:ident, $node:ident, $($topic:ty),* $(,)?) => {
         $(
-            $app.insert_resource($crate::ros2::topic::subscriber::<$topic>($node, $signal));
+            $app.insert_resource($crate::ros2::topic::subscriber::<$topic>($node, $signal.clone()));
         )*
     };
 }
@@ -163,5 +163,6 @@ topic!(
     }
     sub {
         "/rm_gimbal/cmd" as GimbalCmd as GimbalCmdTopic with QosProfile::sensor_data();
+        "/cmd_vel" as Twist as CmdVelTopic with QosProfile::sensor_data();
     }
 );

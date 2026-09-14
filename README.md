@@ -101,6 +101,7 @@
 **订阅话题**
 
 * `/rm_gimbal/cmd`（`rm_interfaces/GimbalCmd`）
+* `/cmd_vel`（`geometry_msgs/Twist`）— 标准底盘速度指令（导航/遥控）：机体系 x 前、y 左 [m/s]，`angular.z` 为偏航角速度 [rad/s]，以底盘（base_link）朝向为参考系；500ms 内有新指令即接管底盘（键盘 WASD 被旁路），指令中断后主动刹停并交还手动控制
 
 ### Talos 共享内存接口
 

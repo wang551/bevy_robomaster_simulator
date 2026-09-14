@@ -27,7 +27,9 @@ use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use std::sync::atomic::AtomicBool;
 
-use crate::components::{CameraMode, FollowingType, ProjectileCooldown, SubscribeAutoAim};
+use crate::components::{
+    CameraMode, FollowingType, NavCmdVel, ProjectileCooldown, SubscribeAutoAim,
+};
 use crate::config::{ConfigPlugin, SimulationConfig};
 use crate::handler::{on_activate, on_hit};
 use crate::robomaster::prelude::RoboMasterPlugins;
@@ -151,6 +153,7 @@ fn main() {
         .insert_resource(SubstepCount(config.physics.substep_count))
         .insert_resource(fixed_time_from_config(&config))
         .insert_resource(SubscribeAutoAim(AtomicBool::new(false)))
+        .init_resource::<NavCmdVel>()
         .insert_resource(ProjectileCooldown(Timer::from_seconds(
             config.projectile.cooldown,
             TimerMode::Once,

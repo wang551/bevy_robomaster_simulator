@@ -15,7 +15,7 @@
 3. [话题接口参考](#3-话题接口参考)
 4. [图像与相机模型](#4-图像与相机模型)
 5. [坐标系与 TF 树](#5-坐标系与-tf-树)
-6. [GimbalCmd 控制协议](#6-gimbalcmd-控制协议)
+6. [控制指令协议（GimbalCmd / cmd_vel）](#6-控制指令协议gimbalcmd--cmd_vel)
 7. [云台闭环与弹道模型](#7-云台闭环与弹道模型)
 8. [场景与目标](#8-场景与目标)
 9. [示例骨架模板](#9-示例骨架模板)
@@ -145,7 +145,8 @@ ros2 topic echo /gimbal_pose --field pose     # 手动转动云台（方向键�
 
 | 话题 | 类型 | QoS | 说明 |
 |---|---|---|---|
-| `/rm_gimbal/cmd` | `rm_interfaces/msg/GimbalCmd` | `sensor_data()`（**BestEffort** / KeepLast 5 / Volatile） | 唯一控制入口，语义见第 6 节 |
+| `/rm_gimbal/cmd` | `rm_interfaces/msg/GimbalCmd` | `sensor_data()`（**BestEffort** / KeepLast 5 / Volatile） | 云台控制入口，语义见第 6 节 |
+| `/cmd_vel` | `geometry_msgs/msg/Twist` | `sensor_data()`（**BestEffort** / KeepLast 5 / Volatile） | 标准底盘速度指令（Nav2/teleop），语义见 6.5 节 |
 
 ### 3.3 带宽与 OOM 警告（重要）
 
@@ -232,7 +233,7 @@ map                                    # 世界/场地固定系
 
 ---
 
-## 6. GimbalCmd 控制协议
+## 6. 控制指令协议（GimbalCmd / cmd_vel）
 
 ### 6.1 消息定义（`rm_interfaces/msg/GimbalCmd.msg`）
 
@@ -250,7 +251,7 @@ bool   fire_advice         # true 触发开火一次（仿真器限频 10 发/�
 
 | 项 | 约定 |
 |---|---|
-| **QoS** | 仿真器订阅端是 **BestEffort**。DDS 匹配规则要求发布端提供的可靠性 ≥ 订阅端请求，**Reliable 发布者匹配不上 BestEffort 订阅者**——你的 publisher 必须也是 BestEffort（`rclcpp::SensorDataQoS()` / `ReliabilityPolicy.BEST_EFFORT`），否则发了也收不到且不报错 |
+| **QoS** | 仿真器订阅端是 **BestEffort**。DDS 匹配规则要求发布端提供的可靠性 ≥ 订阅端请求，因此 **Reliable 或 BestEffort 发布端都能匹配**（不匹配的是反方向：BestEffort 发布 + Reliable 订阅）。推荐发布端用 BestEffort（`rclcpp::SensorDataQoS()` / `ReliabilityPolicy.BEST_EFFORT`）省掉可靠重传开销 |
 | 单位与方向 | `yaw`/`pitch` 单位是**度**不是弧度；`pitch = 90° + 仰角`（水平 90、抬头 120 = 仰角 30°、竖直向上 180） |
 | 指令性质 | 绝对方向（odom 系世界方向），不是增量。仿真器内部 PID（`[vehicle.gimbal_pid]`）驱动云台跟踪，底盘平移/旋转不影响误差计算 |
 | 无解 | `distance = -1.0` → 仿真器移除跟踪目标、PID 停止驱动。**注意消息其他字段默认值 0 会被当作有效指令**（yaw=0/pitch=0 是指向地面的合法方向），无解时务必显式发 `distance=-1.0`，不要发全零消息 |
@@ -281,6 +282,20 @@ ros2 topic pub -r 50 /rm_gimbal/cmd rm_interfaces/msg/GimbalCmd \
 yaw   = atan2(dy, dx) × 180/π
 pitch = 90 + asin(dz / |d|) × 180/π        # 再加弹道补偿，见第 7.3 节
 ```
+
+### 6.5 `/cmd_vel` 底盘速度控制（导航 / 遥控）
+
+标准 `geometry_msgs/msg/Twist` 速度指令，供 Nav2 等导航栈或 `teleop_twist_keyboard` 驱动底盘。**无需任何按键开关**——有指令就接管，没指令自动交还。
+
+| 项 | 约定 |
+|---|---|
+| 参考系 | **底盘（base_link）机体系**，不是云台系（与 WASD 手动的"随头"控制不同）：自瞄云台转动不影响 `cmd_vel` 的方向语义 |
+| 轴与单位 | REP-103：`linear.x` 前、`linear.y` 左 [m/s]（麦轮全向，横移可用），`linear.z` 忽略；`angular.z` 偏航角速度 [rad/s]，俯视逆时针为正；`angular.x/y` 忽略 |
+| 速度执行 | 一阶速度伺服，精确跟踪指令值；加减速上限与最大速度取 `config.toml [vehicle]` 的 `linear_acceleration` / `max_speed` / `yaw_acceleration` / `rotation_speed`（超界自动限幅） |
+| 接管仲裁 | 500ms 内有新消息（含全零消息）→ 底盘归 `/cmd_vel`，**WASD 被旁路**；超时后先主动刹停（不是靠摩擦滑行），停稳后自动交还键盘 |
+| 与 F5 的关系 | 完全独立，可同时运行（导航 + 自瞄）；`/cmd_vel` 不受 F5 门控 |
+| QoS | 订阅端 BestEffort（`sensor_data()`），按 DDS 匹配规则（发布端可靠性 ≥ 订阅端请求即可），Reliable 或 BestEffort 发布端都能匹配——Nav2 velocity smoother、`ros2 topic pub`（默认 Reliable）、teleop 均可直接使用 |
+| 联调日志 | 2Hz 打印 `[ROS2] cmd_vel linear=(x, y) angular.z=..` |
 
 ---
 
@@ -753,9 +768,12 @@ Fixed Frame 设为 **`map`**：
 
 | 内容 | 位置 |
 |---|---|
-| 话题名称/类型/QoS 总表 | `src/ros2/topic.rs:146-167` |
+| 话题名称/类型/QoS 总表 | `src/ros2/topic.rs:146-169` |
 | TF 树构建 + pose 话题 | `src/ros2/plugin.rs:126-294` |
-| GimbalCmd 消费逻辑 | `src/ros2/plugin.rs:296-349` |
+| GimbalCmd 消费逻辑 | `src/ros2/plugin.rs:299-353` |
+| `/cmd_vel` 消费逻辑（写入 NavCmdVel） | `src/ros2/plugin.rs:355-378` |
+| `/cmd_vel` 底盘执行（速度伺服 + 接管仲裁） | `src/systems/input.rs:60-148`（`vehicle_controls` 导航分支） |
+| NavCmdVel 资源（新鲜度/刹停状态机） | `src/components/infantry.rs:48-100` |
 | 指令角度约定（pitch 从竖直轴） | `src/systems/gimbal_pid.rs:14-24` |
 | 图像/内参发布 | `src/ros2/capture.rs` |
 | 相机内参公式 | `src/capture.rs:147-176` |
