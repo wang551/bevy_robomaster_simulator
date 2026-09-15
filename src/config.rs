@@ -22,6 +22,8 @@ pub struct SimulationConfig {
     pub livox_ros: LivoxRosConfig,
     #[serde(default)]
     pub ros2: RosPublishConfig,
+    #[serde(default)]
+    pub scene: SceneConfig,
     pub physics: PhysicsConfig,
     pub vehicle: VehicleConfig,
     #[serde(default)]
@@ -392,6 +394,35 @@ pub struct ArmorConfig {
     pub hit_angle_max: f32,
 }
 
+/// Which battlefield map to load.
+///
+/// The RMUC map (`rmuc`) is the full arena: ground + outposts + power rune + tech core,
+/// spawned from several GLB assets whose positions are hard-coded in `src/scene.rs`.
+/// The RMUL map (`rmul`) is a single self-contained `GROUND_RMUL.glb` with no extra
+/// gameplay elements.
+#[derive(Deserialize, Reflect, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MapKind {
+    /// Full RMUC arena: GROUND + OUTPOST + POWER + TECH_CORE.
+    #[default]
+    Rmuc,
+    /// Simple RMUL field: just GROUND_RMUL.glb.
+    Rmul,
+}
+
+#[derive(Deserialize, Reflect, Clone)]
+#[serde(default)]
+pub struct SceneConfig {
+    /// Which battlefield map to load. Read once at startup (not hot-reloadable).
+    pub map: MapKind,
+}
+
+impl Default for SceneConfig {
+    fn default() -> Self {
+        Self { map: MapKind::Rmuc }
+    }
+}
+
 impl Default for ArmorConfig {
     fn default() -> Self {
         Self {
@@ -419,6 +450,7 @@ impl Default for SimulationConfig {
                 capture: CapturePipelineConfig::default(),
                 livox_ros: LivoxRosConfig::default(),
                 ros2: RosPublishConfig::default(),
+                scene: SceneConfig::default(),
                 physics: PhysicsConfig::default(),
                 vehicle: VehicleConfig::default(),
                 mecanum: MecanumConfig::default(),
