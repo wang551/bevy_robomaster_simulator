@@ -1,0 +1,39 @@
+# Default: normalize text files to LF in the repository
+* text=auto
+
+# Rust / Cargo
+*.rs text eol=lf
+*.toml text eol=lf
+
+# Documentation
+*.md text eol=lf
+*.txt text eol=lf
+
+# Scripts
+*.sh text eol=lf
+*.ps1 text eol=lf
+
+# Git metadata
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Images
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+
+# Archives
+*.zip binary
+*.7z binary
+*.gz binary
+*.tar binary
+
+# 3D assets
+*.glb binary
+*.gltf binary
+*.fbx binary
+*.obj binary
+*.blend binary
