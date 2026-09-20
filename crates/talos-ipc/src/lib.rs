@@ -10,6 +10,6 @@ mod subscriber;
 mod triple_buffer;
 
 pub use layout::*;
-pub use publisher::ShmPublisher;
+pub use publisher::{GimbalCmdPublisher, ShmPublisher};
 pub use shm::{ShmError, ShmRegion};
 pub use subscriber::ShmSubscriber;

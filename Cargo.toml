@@ -45,6 +45,11 @@ name = "talos_gimbal_mock_server"
 path = "src/bin/talos_gimbal_mock_server.rs"
 required-features = ["talos", "ffmpeg"]
 
+[[bin]]
+name = "talos_gimbal_cmd_pub"
+path = "src/bin/talos_gimbal_cmd_pub.rs"
+required-features = ["talos"]
+
 [patch.crates-io]
 # r2r 0.9.5 (latest on crates.io) cannot compile against ROS2 lyrical/rolling
 # headers (rcl_timer_init removed, RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_NODE

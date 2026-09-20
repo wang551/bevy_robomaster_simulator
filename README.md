@@ -100,7 +100,7 @@
 
 **订阅话题**
 
-* `/rm_gimbal/cmd`（`rm_interfaces/GimbalCmd`）
+* `/rm_gimbal/cmd`（`rm_interfaces/GimbalCmd`）— 云台控制，**角度差**语义：`yaw_diff`/`pitch_diff` 单位度、以云台当前实际朝向为基准累加（`pitch_diff` 正 = 抬头），`yaw`/`pitch` 字段仅日志；`distance = -1` 放弃目标。详见 `docs/ros2-autoaim.md` 第 6 节
 * `/cmd_vel`（`geometry_msgs/Twist`）— 标准底盘速度指令（导航/遥控）：机体系 x 前、y 左 [m/s]，`angular.z` 为偏航角速度 [rad/s]，以底盘（base_link）朝向为参考系；500ms 内有新指令即接管底盘（键盘 WASD 被旁路），指令中断后主动刹停并交还手动控制
 
 ### Talos 共享内存接口
@@ -114,7 +114,7 @@
 
 **订阅命令**
 
-* `gimbal_cmd` - 云台控制命令（含开火建议）
+* `gimbal_cmd` - 云台控制命令（**角度差**语义，同 ROS2 链路：`yaw_diff_deg`/`pitch_diff_deg` 度、以云台当前实际朝向为基准累加；**pitch 符号与 ROS2 链路相反**，正值 = 低头；含开火建议）。`SHM_VERSION` 已随语义切换升到 3 —— C++ 端（talos-cpp）必须同步更新 `GimbalCmd` 结构体，否则连接会因版本不匹配失败；发送端建议等上一条被消费再发下一条（增量不因覆写丢失），可用仓库内 `talos_gimbal_cmd_pub` 工具联调
 
 ---
 

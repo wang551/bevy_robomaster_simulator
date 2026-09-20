@@ -9,6 +9,7 @@ use crate::talos::capture::{
     TalosCaptureContext, TalosCapturePlugin, TalosFrameStamp, advance_talos_frame_stamp,
     publish_talos_runtime_state_system,
 };
+use crate::util::rate_limiter::AverageRateLimiter;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
@@ -18,6 +19,9 @@ use talos_ipc::*;
 
 #[derive(Resource)]
 pub struct ShmSubscriberRes(pub Arc<Mutex<ShmSubscriber>>);
+
+#[derive(Resource, Deref, DerefMut)]
+struct CmdLogRateLimiter(AverageRateLimiter);
 
 #[derive(Resource, Deref, DerefMut)]
 pub struct TalosEnabled(pub AtomicBool);
@@ -106,12 +110,15 @@ impl Plugin for TalosPlugin {
             process_subscription
                 .run_if(|enabled: Res<SubscribeAutoAim>| enabled.load(Ordering::Acquire)),
         );
+        app.insert_resource(CmdLogRateLimiter(AverageRateLimiter::from_hz(2.0)));
     }
 }
 
 fn process_subscription(
+    time: Res<Time>,
     context: Option<Res<ShmSubscriberRes>>,
     mut commands: Commands,
+    mut cmd_log_limiter: ResMut<CmdLogRateLimiter>,
     gimbal: Single<
         (Entity, Option<&mut GimbalAimTracker>),
         (
@@ -121,15 +128,25 @@ fn process_subscription(
             Without<InfantryLaunchOffset>,
         ),
     >,
+    muzzle: Single<&GlobalTransform, (With<InfantryLaunchOffset>, With<Controlled>)>,
 ) {
     let Some(ctx) = context else {
         return;
     };
     let (gimbal_entity, tracker) = gimbal.into_inner();
+    cmd_log_limiter.tick(time.delta());
 
     let Some(cmd) = recv_gimbal_cmd(&ctx) else {
         return;
     };
+    // Same 2Hz echo pattern as the ROS2 GimbalCmd diagnostic so the two links can be
+    // diffed against their senders the same way.
+    if cmd_log_limiter.allow() {
+        info!(
+            "[TALOS] GimbalCmd yaw_diff={:.3} pitch_diff={:.3} distance={:.3} fire={}",
+            cmd.yaw_diff_deg, cmd.pitch_diff_deg, cmd.distance_m, cmd.fire_advice
+        );
+    }
     // No solution from the solver: drop the target so the PID loop stops driving.
     if cmd.distance_m == -1.0 {
         commands.entity(gimbal_entity).remove::<GimbalAimTracker>();
@@ -141,7 +158,10 @@ fn process_subscription(
         });
     }
 
-    let target = GimbalAimTarget::from_solver_degrees(cmd.yaw_deg, -cmd.pitch_deg);
+    // Commands are angle deltas re-based on the muzzle's current pointing. The pitch
+    // sign matches the legacy absolute `pitch_deg` field: inverted relative to ROS2.
+    let target = GimbalAimTarget::from_muzzle_world(muzzle.rotation())
+        .shifted_by_deg(cmd.yaw_diff_deg, -cmd.pitch_diff_deg);
     match tracker {
         Some(mut tracker) => tracker.retarget(target),
         None => {
