@@ -5,7 +5,9 @@ pub const IMAGE_HEIGHT: u32 = 1080;
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub const SHM_MAGIC: u32 = 0x54414C05;
-pub const SHM_VERSION: u32 = 2;
+/// Bumped 2 -> 3 when `GimbalCmd` switched from absolute angles to angle deltas:
+/// peers still writing the old layout must fail loudly instead of sending zeros.
+pub const SHM_VERSION: u32 = 3;
 
 pub const IMAGE_CHANNELS: u32 = 3;
 pub const IMAGE_SIZE: usize = (IMAGE_WIDTH * IMAGE_HEIGHT * IMAGE_CHANNELS) as usize;
@@ -56,11 +58,16 @@ impl Default for PoseMeta {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GimbalCmd {
     pub timestamp_ns: u64,
+    /// Absolute angles are kept for peer compatibility but no longer consumed by the
+    /// simulator: `yaw_diff_deg`/`pitch_diff_deg` (degrees, re-based on the gimbal's
+    /// current pointing by the receiver) are the control fields.
     pub yaw_deg: f32,
     pub pitch_deg: f32,
     pub distance_m: f32,
     pub fire_advice: u8,
-    pub _pad: [u8; 11],
+    pub _pad: [u8; 3],
+    pub yaw_diff_deg: f32,
+    pub pitch_diff_deg: f32,
 }
 const _: () = assert!(size_of::<GimbalCmd>() == 32);
 

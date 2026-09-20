@@ -311,14 +311,21 @@ fn process_subscription(
             Without<InfantryLaunchOffset>,
         ),
     >,
+    muzzle: Single<&GlobalTransform, (With<InfantryLaunchOffset>, With<Controlled>)>,
 ) {
     let (gimbal_entity, mut tracker) = gimbal.into_inner();
     fire_rate_limiter.tick(time.delta());
     cmd_log_limiter.tick(time.delta());
+    // Commands are angle deltas re-based on the muzzle's current pointing, so the
+    // messages drained in one frame must sum into a single step; applying them one by
+    // one against the same base would keep only the last delta.
+    let (mut yaw_diff_sum, mut pitch_diff_sum) = (0.0_f32, 0.0_f32);
+    let mut has_command = false;
     loop {
         let Ok(Some(cmd)) = gimbal_cmd.try_recv() else {
-            return;
+            break;
         };
+        has_command = true;
         // Diagnostic for the rm_sim_bridge round-trip: echo exactly what the
         // message carried so sent-vs-received field values can be diffed live.
         if cmd_log_limiter.allow() {
@@ -340,14 +347,21 @@ fn process_subscription(
             }
         }
 
-        let target = GimbalAimTarget::from_solver_degrees(cmd.yaw as f32, cmd.pitch as f32);
-        match tracker.as_mut() {
-            Some(tracker) => tracker.retarget(target),
-            None => {
-                commands
-                    .entity(gimbal_entity)
-                    .insert(GimbalAimTracker::new(target));
-            }
+        yaw_diff_sum += cmd.yaw_diff as f32;
+        pitch_diff_sum += cmd.pitch_diff as f32;
+    }
+    if !has_command {
+        return;
+    }
+
+    let target = GimbalAimTarget::from_muzzle_world(muzzle.rotation())
+        .shifted_by_deg(yaw_diff_sum, pitch_diff_sum);
+    match tracker.as_mut() {
+        Some(tracker) => tracker.retarget(target),
+        None => {
+            commands
+                .entity(gimbal_entity)
+                .insert(GimbalAimTracker::new(target));
         }
     }
 }

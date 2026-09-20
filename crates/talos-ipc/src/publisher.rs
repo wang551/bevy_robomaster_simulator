@@ -244,6 +244,63 @@ fn aux_f32_to_bytes(aux_f32: [f32; 4]) -> [u8; 16] {
     bytes
 }
 
+/// Writes [`GimbalCmd`]s into the meta region created by the simulator.
+///
+/// The simulator owns [`ShmPublisher`] (it publishes images); gimbal commands flow the
+/// other way, from the vision peer into the same region. That peer needs this writer
+/// instead of `ShmPublisher`, which would re-create the region out from under it.
+///
+/// # Safety contract
+/// At most one `GimbalCmdPublisher` (or equivalent C++ writer) may be attached to the
+/// region at a time — the triple buffer supports a single producer.
+pub struct GimbalCmdPublisher {
+    meta_region: ShmRegion,
+}
+
+impl GimbalCmdPublisher {
+    /// Connects to the meta region; the simulator must already be running.
+    pub fn connect() -> Result<Self, ShmError> {
+        let meta_region = ShmRegion::open(SHM_NAME_META, size_of::<ShmMetaRegion>())?;
+
+        unsafe {
+            let meta = meta_region.as_ref::<ShmMetaRegion>();
+            if meta.header.magic != SHM_MAGIC || meta.header.version != SHM_VERSION {
+                return Err(ShmError::InvalidSize);
+            }
+        }
+
+        Ok(Self { meta_region })
+    }
+
+    /// True once the simulator consumed the previous command.
+    pub fn previous_consumed(&self) -> bool {
+        unsafe {
+            let meta = self.meta_region.as_ref::<ShmMetaRegion>();
+            meta.gimbal_cmd.state.load(Ordering::Acquire) & FLAG_NEW == 0
+        }
+    }
+
+    /// Publishes a command, refusing to overwrite one the simulator has not consumed
+    /// yet. Commands are angle deltas, so a dropped command is a permanently lost
+    /// rotation step: on `false`, retry the *same* command instead of building a new
+    /// one.
+    pub fn try_publish(&mut self, cmd: GimbalCmd) -> bool {
+        if !self.previous_consumed() {
+            return false;
+        }
+
+        unsafe {
+            let meta = self.meta_region.as_mut::<ShmMetaRegion>();
+            let buf = &mut meta.gimbal_cmd;
+            let mut producer =
+                TripleBufferProducer::new(&buf.state, &mut buf.write_idx, &mut buf.slots);
+            *producer.borrow_mut() = cmd;
+            producer.publish();
+        }
+        true
+    }
+}
+
 /// Trait for initializing triple buffer state
 trait TripleBufferInit {
     fn init_state(&mut self);

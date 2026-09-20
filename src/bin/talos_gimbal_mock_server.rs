@@ -159,8 +159,8 @@ fn publish_frame(
 
     if let Some(cmd) = subscriber.recv_gimbal_cmd() {
         println!(
-            "recv gimbal cmd: ts={} yaw={:.2} pitch={:.2} dist={:.3} fire={}",
-            cmd.timestamp_ns, cmd.yaw_deg, cmd.pitch_deg, cmd.distance_m, cmd.fire_advice
+            "recv gimbal cmd: ts={} yaw_diff={:.2} pitch_diff={:.2} dist={:.3} fire={}",
+            cmd.timestamp_ns, cmd.yaw_diff_deg, cmd.pitch_diff_deg, cmd.distance_m, cmd.fire_advice
         );
     }
 }

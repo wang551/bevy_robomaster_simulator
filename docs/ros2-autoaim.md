@@ -57,7 +57,7 @@
 2. **仿真器不发布任何"检测结果"**。`rm_interfaces` 里的 `Armors`、`Target`、`RuneTarget` 等消息是为团队既有流水线（rm_vision 风格）预留的兼容接口，仿真器本身不发布它们。**目标真值一律走 `/tf`**——每块装甲板、能量机关扇叶、云台、相机都有独立 frame，可用于：
    - 在写视觉检测**之前**，先真值调试解算器、控制器、弹道补偿（推荐的开发路径）；
    - 写视觉检测**之后**，用它做检测/位姿结果的定量对拍。
-3. **指令是"绝对世界方向"**：`yaw`/`pitch` 描述的是**弹道应指向的世界系方向**（odom 系，ROS 轴向），不是相对当前云台的增量；仿真器内部用 PID 闭环驱动云台跟踪，你不需要做云台速度控制。
+3. **指令是角度增量**：`yaw_diff`/`pitch_diff` 是相对**云台当前实际朝向**的增量（下位机行为 `current += diff`），发送端用反馈（`/tf` 的 `odom→gimbal_link` 或 `/gimbal_pose`）算增量即可无偏还原绝对目标；仿真器内部用 PID 闭环驱动云台跟踪，你不需要做云台速度控制。
 
 ---
 
@@ -239,10 +239,10 @@ map                                    # 世界/场地固定系
 
 ```
 std_msgs/Header header     # 仿真器不校验，可为空
-float64 pitch              # 度。从竖直轴起算：90 = 水平，>90 抬头，<90 低头
-float64 yaw                # 度。odom 系绕 +Z，正方向俯视逆时针（向左）
-float64 yaw_diff           # 信息字段，仿真器只打日志，可为 0
-float64 pitch_diff         # 信息字段，同上
+float64 pitch              # 信息字段，仿真器只打日志，可为 0
+float64 yaw                # 信息字段，同上
+float64 yaw_diff           # 度。yaw 增量：正值与 yaw 同向（俯视逆时针/向左）
+float64 pitch_diff         # 度。pitch 增量：正值 = 抬头
 float64 distance           # 目标距离（米）；**-1.0 = 放弃目标**
 bool   fire_advice         # true 触发开火一次（仿真器限频 10 发/秒）
 ```
@@ -252,36 +252,41 @@ bool   fire_advice         # true 触发开火一次（仿真器限频 10 发/�
 | 项 | 约定 |
 |---|---|
 | **QoS** | 仿真器订阅端是 **BestEffort**。DDS 匹配规则要求发布端提供的可靠性 ≥ 订阅端请求，因此 **Reliable 或 BestEffort 发布端都能匹配**（不匹配的是反方向：BestEffort 发布 + Reliable 订阅）。推荐发布端用 BestEffort（`rclcpp::SensorDataQoS()` / `ReliabilityPolicy.BEST_EFFORT`）省掉可靠重传开销 |
-| 单位与方向 | `yaw`/`pitch` 单位是**度**不是弧度；`pitch = 90° + 仰角`（水平 90、抬头 120 = 仰角 30°、竖直向上 180） |
-| 指令性质 | 绝对方向（odom 系世界方向），不是增量。仿真器内部 PID（`[vehicle.gimbal_pid]`）驱动云台跟踪，底盘平移/旋转不影响误差计算 |
-| 无解 | `distance = -1.0` → 仿真器移除跟踪目标、PID 停止驱动。**注意消息其他字段默认值 0 会被当作有效指令**（yaw=0/pitch=0 是指向地面的合法方向），无解时务必显式发 `distance=-1.0`，不要发全零消息 |
+| 单位与方向 | `yaw_diff`/`pitch_diff` 单位是**度**不是弧度；`yaw_diff` 正 = 俯视逆时针（向左），`pitch_diff` 正 = 抬头 |
+| **指令性质（增量基准）** | 每条消息以**云台当前实际朝向**为基准累加（下位机行为 `current += diff`）。推荐发送端用反馈算增量：`yaw_diff = 目标yaw − 当前云台yaw`（反馈取 `/tf` 的 `odom→gimbal_link` 或 `/gimbal_pose`），这样闭环发送下仿真器能无偏还原绝对目标、PID 滞后不会累积成漂移 |
+| 增量丢包 | BestEffort + 增量语义天然兼容丢包：发送端按反馈闭环算增量时，丢一条下一条自动纠正（延迟一个周期收敛），无需可靠传输 |
+| 无解 | `distance = -1.0` → 仿真器移除跟踪目标、PID 停止驱动。**注意消息其他字段默认值 0 会被当作有效指令**（`yaw_diff=0/pitch_diff=0` 是"保持当前朝向"的合法指令），无解时务必显式发 `distance=-1.0`，不要发全零消息 |
 | 开火 | `fire_advice = true` 触发一次发射，仿真器限频 **10Hz**（超频的 fire 被静默丢弃）。F5 开启后 Space 手动开火仍可用，但外部 fire_advice 与之独立 |
-| 消息频率 | 建议 ≥ 50Hz 持续发布（PID 按消息连续 retarget）。长时间不发消息 = 云台停在最后一个目标上 |
+| 消息频率 | 建议 ≥ 50Hz 持续发布（每条独立生效，同帧内多条会求和后一次应用）。长时间不发消息 = 云台停在当前位置 |
 | **F5 总开关** | 仿真器窗口内按 **F5** 才开始消费 `/rm_gimbal/cmd`；关闭时消息被静默忽略（这也是"发了没反应"的第一大原因）。F5 开启期间方向键手动云台被禁用，`WASD` 底盘仍可手动开 |
-| 联调日志 | 仿真器以 2Hz 打印收到的指令：`[ROS2] GimbalCmd yaw=.. pitch=.. yaw_diff=.. pitch_diff=.. distance=.. fire=..`，收发字段逐值比对、验证符号约定都靠它 |
+| 联调日志 | 仿真器以 2Hz 打印收到的指令：`[ROS2] GimbalCmd yaw=.. pitch=.. yaw_diff=.. pitch_diff=.. distance=.. fire=..`，收发字段逐值比对、验证符号约定都靠它（`yaw`/`pitch` 只进日志不进控制） |
 
 ### 6.3 手动冒烟测试
 
-不用写代码就能验证整条链路（先按 F5）：
+不用写代码就能验证整条链路（先按 F5）。**注意 `ros2 topic pub` 默认 1Hz 连发**——增量语义下连续消息会持续累加，验证单次转动要用 `--once`：
 
 ```sh
 source /opt/ros/<distro>/setup.bash && source <simulator>/install/setup.bash
 
-# 云台向左转 30°，保持水平；distance=-1 会丢弃目标，这里给一个正距离让 PID 跟踪
-ros2 topic pub -r 50 /rm_gimbal/cmd rm_interfaces/msg/GimbalCmd \
-  "{yaw: 30.0, pitch: 90.0, distance: 3.0}" --qos-reliability best_effort
+# 云台向左转 30°（单发一条增量）；distance 给一个正距离让 PID 跟踪
+ros2 topic pub --once /rm_gimbal/cmd rm_interfaces/msg/GimbalCmd \
+  "{yaw_diff: 30.0, pitch_diff: 0.0, distance: 3.0}" --qos-reliability best_effort
 ```
 
-仿真器终端应出现 2Hz 日志，云台平滑转到指令方向；松开（Ctrl+C）云台停住。改 `pitch: 105.0` 观察抬头 15°，可确认俯仰方向。
+仿真器终端应出现 `[ROS2] GimbalCmd ...` 日志，云台平滑转过后停住（2Hz 日志只在有新消息时打印）。再发一条 `pitch_diff: 10.0` 观察抬头 10°，可确认俯仰方向。连发验证累加：`-r 10` 发 `yaw_diff: 3.0` 一秒 ≈ 向左 30°。
 
 ### 6.4 求解器输出公式速查
 
 设目标相对枪口的方向向量 `d = (dx, dy, dz)`（odom 系，米；用 `/tf` 查 `odom → armor_N` 或 PnP 结果变换到 odom 系）：
 
 ```text
-yaw   = atan2(dy, dx) × 180/π
-pitch = 90 + asin(dz / |d|) × 180/π        # 再加弹道补偿，见第 7.3 节
+目标yaw   = atan2(dy, dx) × 180/π
+目标仰角  = asin(dz / |d|) × 180/π            # 再加弹道补偿，见第 7.3 节
+yaw_diff   = wrap(目标yaw − 当前yaw) 到 ±180°  # 当前yaw = /gimbal_pose（或 /tf）四元数的 ZYX euler yaw
+pitch_diff = 目标仰角 − 当前仰角               # 正 = 抬头
 ```
+
+**当前角读数符号注意**（实测 2026-09-18）：`/gimbal_pose` / `/tf` 的 `gimbal_link` 四元数按标准 ZYX euler 提取后，**yaw 与指令同号，pitch 与仰角反号**（中性装配枪管上仰 25°，读数为 pitch=−25°）。因此从读数算增量时用 `当前仰角 = −euler_pitch`。
 
 ### 6.5 `/cmd_vel` 底盘速度控制（导航 / 遥控）
 
@@ -442,22 +447,26 @@ class AutoAimTemplate(Node):
         pass
 
     def on_control(self) -> None:
-        # TODO(解算)：在此填入你的解算器。参考（odom 系目标方向 d=(dx,dy,dz)）：
-        #   yaw   = math.degrees(math.atan2(dy, dx))
-        #   pitch = 90.0 + math.degrees(math.asin(dz / dist))
-        #   # 弹道补偿：pitch += degrees(atan(0.5 * 9.81 * (dist/25)**2 / dist))
+        # TODO(解算)：在此填入你的解算器。参考（odom 系目标方向 d=(dx,dy,dz)，
+        # 反馈从 /tf 的 odom->gimbal_link 读四元数做 ZYX euler 分解）：
+        #   goal_yaw  = math.degrees(math.atan2(dy, dx))
+        #   goal_elev = math.degrees(math.asin(dz / dist))
+        #   # 弹道补偿：goal_elev += degrees(atan(0.5 * 9.81 * (dist/25)**2 / dist))
+        #   cur_elev  = -euler_pitch          # readback pitch 与仰角反号（见 6.4）
+        #   yaw_diff   = wrap_deg(goal_yaw - cur_yaw)   # wrap 到 ±180°
+        #   pitch_diff = goal_elev - cur_elev             # 正 = 抬头
         #   # fire：角误差小于阈值时置 True（仿真器限频 10Hz）
         #
         # 骨架默认无解：distance=-1.0 让仿真器停止跟踪（不要发全零消息！）
-        self.publish_cmd(yaw=0.0, pitch=90.0, distance=-1.0, fire_advice=False)
+        self.publish_cmd(yaw_diff=0.0, pitch_diff=0.0, distance=-1.0, fire_advice=False)
 
-    def publish_cmd(self, yaw: float, pitch: float, distance: float,
+    def publish_cmd(self, yaw_diff: float, pitch_diff: float, distance: float,
                     fire_advice: bool = False) -> None:
         msg = GimbalCmd()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.yaw = float(yaw)              # 度，绕 +Z 俯视逆时针
-        msg.pitch = float(pitch)          # 度，90=水平，>90 抬头
-        msg.distance = float(distance)    # 米；-1.0 = 放弃目标
+        msg.yaw_diff = float(yaw_diff)      # 度，正 = 俯视逆时针（向左）
+        msg.pitch_diff = float(pitch_diff)  # 度，正 = 抬头
+        msg.distance = float(distance)      # 米；-1.0 = 放弃目标
         msg.fire_advice = bool(fire_advice)
         self.cmd_pub.publish(msg)
 
@@ -584,21 +593,26 @@ class AutoAimNode : public rclcpp::Node {
   }
 
   void OnControl() {
-    // TODO(解算)：在此填入你的解算器。参考（odom 系目标方向 d=(dx,dy,dz)）：
-    //   yaw   = atan2(dy, dx) * 180 / M_PI;
-    //   pitch = 90 + asin(dz / dist) * 180 / M_PI;
-    //   // 弹道补偿：pitch += atan(0.5 * 9.81 * pow(dist / 25, 2) / dist) * 180 / M_PI;
+    // TODO(解算)：在此填入你的解算器。参考（odom 系目标方向 d=(dx,dy,dz)，
+    // 反馈从 /tf 的 odom->gimbal_link 读四元数做 ZYX euler 分解）：
+    //   goal_yaw  = atan2(dy, dx) * 180 / M_PI;
+    //   goal_elev = asin(dz / dist) * 180 / M_PI;
+    //   // 弹道补偿：goal_elev += atan(0.5 * 9.81 * pow(dist / 25, 2) / dist) * 180 / M_PI;
+    //   cur_elev  = -euler_pitch;   // readback pitch 与仰角反号（见 6.4）
+    //   yaw_diff   = wrap_deg(goal_yaw - cur_yaw);   // wrap 到 ±180°
+    //   pitch_diff = goal_elev - cur_elev;            // 正 = 抬头
     //   // fire：角误差小于阈值时置 true（仿真器限频 10Hz）
     //
     // 骨架默认无解：distance=-1 让仿真器停止跟踪（不要发全零消息！）
-    PublishCmd(/*yaw=*/0.0, /*pitch=*/90.0, /*distance=*/-1.0);
+    PublishCmd(/*yaw_diff=*/0.0, /*pitch_diff=*/0.0, /*distance=*/-1.0);
   }
 
-  void PublishCmd(double yaw, double pitch, double distance, bool fire_advice = false) {
+  void PublishCmd(double yaw_diff, double pitch_diff, double distance,
+                  bool fire_advice = false) {
     rm_interfaces::msg::GimbalCmd cmd;
     cmd.header.stamp = now();
-    cmd.yaw = yaw;                // 度，绕 +Z 俯视逆时针
-    cmd.pitch = pitch;            // 度，90=水平，>90 抬头
+    cmd.yaw_diff = yaw_diff;        // 度，正 = 俯视逆时针（向左）
+    cmd.pitch_diff = pitch_diff;    // 度，正 = 抬头
     cmd.distance = distance;      // 米；-1.0 = 放弃目标
     cmd.fire_advice = fire_advice;
     cmd_pub_->publish(cmd);
@@ -716,7 +730,7 @@ Fixed Frame 设为 **`map`**：
 
 | 消息/服务 | 字段摘要 | 用途（团队流水线约定） |
 |---|---|---|
-| `GimbalCmd` | `pitch, yaw, yaw_diff, pitch_diff, distance, fire_advice` | **仿真器唯一订阅**，见第 6 节 |
+| `GimbalCmd` | `yaw_diff, pitch_diff, distance, fire_advice`（`yaw`/`pitch` 仅日志） | **仿真器唯一订阅**，见第 6 节 |
 | `Armor` / `Armors` | `number, type, distance_to_image_center, pose` / 数组 | 检测器输出的装甲板列表 |
 | `Target` | `tracking, id, armors_num, position, velocity, yaw, v_yaw, radius_1/2, d_za, d_zc, ...` | 跟踪器输出的整车目标模型 |
 | `RuneTarget` | `pts[5], is_lost, is_big_rune` | 能量机关扇叶检测结果 |
@@ -770,11 +784,11 @@ Fixed Frame 设为 **`map`**：
 |---|---|
 | 话题名称/类型/QoS 总表 | `src/ros2/topic.rs:146-169` |
 | TF 树构建 + pose 话题 | `src/ros2/plugin.rs:126-294` |
-| GimbalCmd 消费逻辑 | `src/ros2/plugin.rs:299-353` |
-| `/cmd_vel` 消费逻辑（写入 NavCmdVel） | `src/ros2/plugin.rs:355-378` |
+| GimbalCmd 消费逻辑（角度差 → PID 目标） | `src/ros2/plugin.rs:299-367` |
+| `/cmd_vel` 消费逻辑（写入 NavCmdVel） | `src/ros2/plugin.rs:369-392` |
 | `/cmd_vel` 底盘执行（速度伺服 + 接管仲裁） | `src/systems/input.rs:60-148`（`vehicle_controls` 导航分支） |
 | NavCmdVel 资源（新鲜度/刹停状态机） | `src/components/infantry.rs:48-100` |
-| 指令角度约定（pitch 从竖直轴） | `src/systems/gimbal_pid.rs:14-24` |
+| 增量基准提取 + 角度差应用（`from_muzzle_world` / `shifted_by_deg`） | `src/systems/gimbal_pid.rs:14-40` |
 | 图像/内参发布 | `src/ros2/capture.rs` |
 | 相机内参公式 | `src/capture.rs:147-176` |
 | 点云合成 | `src/ros2/livox.rs` |

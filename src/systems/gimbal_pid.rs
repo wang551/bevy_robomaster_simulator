@@ -11,11 +11,30 @@ pub struct GimbalAimTarget {
 }
 
 impl GimbalAimTarget {
-    /// Solver commands arrive in degrees with pitch measured from the vertical axis.
-    pub fn from_solver_degrees(yaw_deg: f32, pitch_deg: f32) -> Self {
+    /// Invert [`Self::rotation`] on a live muzzle world rotation: recovers the
+    /// `(yaw, pitch)` the PID is currently tracking. The gun barrel is the
+    /// muzzle's local `+Y` (the `SHOT_DIRECTION` mount pitches it up 25° at
+    /// rest, projectiles launch along `Vec3::Y`), so the probe is its antipode
+    /// `-Y`: rolling the muzzle about the barrel leaves it untouched, and the
+    /// extraction singularity needs the probe straight up/down — i.e. barrel
+    /// elevation ±90°, which the ±45° gimbal pitch limit cannot reach. Probing
+    /// `+Z` instead tracks an axis 90° below the barrel and flips the extracted
+    /// yaw by 180° the moment the barrel dips under the horizon.
+    pub fn from_muzzle_world(rotation: Quat) -> Self {
+        let back = rotation * Vec3::NEG_Y;
         Self {
-            yaw: yaw_deg.to_radians(),
-            pitch: (pitch_deg - 90.0).to_radians(),
+            yaw: back.x.atan2(back.z),
+            pitch: -back.y.asin() - std::f32::consts::FRAC_PI_2,
+        }
+    }
+
+    /// Solver-protocol angle deltas in degrees: positive yaw diff turns the same way
+    /// positive solver yaw does (CCW seen from above), positive pitch diff raises the
+    /// muzzle. Yaw wraps so the PID always takes the short way around.
+    pub fn shifted_by_deg(self, yaw_diff_deg: f32, pitch_diff_deg: f32) -> Self {
+        Self {
+            yaw: wrap_angle(self.yaw + yaw_diff_deg.to_radians()),
+            pitch: self.pitch + pitch_diff_deg.to_radians(),
         }
     }
 
@@ -301,5 +320,92 @@ mod tests {
     fn wrap_angle_takes_the_short_way_around() {
         assert!((wrap_angle(std::f32::consts::TAU + 0.2) - 0.2).abs() < 1e-5);
         assert!((wrap_angle(std::f32::consts::PI + 0.1) + std::f32::consts::PI - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn from_muzzle_world_roundtrips_the_target_parametrization() {
+        // Pitch domain of the muzzle mount: barrel elevation − 90°, i.e. well
+        // below zero everywhere the gimbal pitch limit can reach.
+        for (yaw, pitch) in [
+            (0.0f32, -0.349),
+            (0.6, -1.134),
+            (-1.2, -0.4),
+            (2.8, -1.920),
+            (-2.8, -0.349),
+            (0.0, -2.8),
+        ] {
+            let target = GimbalAimTarget { yaw, pitch };
+            let recovered = GimbalAimTarget::from_muzzle_world(target.rotation());
+
+            let yaw_error = wrap_angle(recovered.yaw - yaw);
+            assert!(
+                yaw_error.abs() < 1e-5,
+                "yaw {yaw} recovered as {}",
+                recovered.yaw
+            );
+            assert!(
+                (recovered.pitch - pitch).abs() < 1e-5,
+                "pitch {pitch} recovered as {}",
+                recovered.pitch
+            );
+        }
+    }
+
+    /// Regression test for the 180° yaw flip: the old `+Z` probe tracked an axis
+    /// 90° below the barrel, whose `atan2` yaw jumped by 180° exactly when the
+    /// barrel crossed the horizon (muzzle-frame pitch −90°, gimbal pitch ≈ −25°
+    /// with the 25° mount). The barrel-antipode probe must stay continuous
+    /// through that crossing.
+    #[test]
+    fn from_muzzle_world_stays_continuous_across_the_horizon() {
+        for pitch_deg in [-100.0f32, -95.0, -90.0, -85.0, -80.0] {
+            let pitch = pitch_deg.to_radians();
+            let muzzle = Quat::from_euler(EulerRot::YXZ, 0.8, pitch, 0.0);
+            let extracted = GimbalAimTarget::from_muzzle_world(muzzle);
+
+            assert!(
+                (wrap_angle(extracted.yaw - 0.8)).abs() < 1e-5,
+                "yaw flipped to {} at pitch {pitch_deg}°",
+                extracted.yaw
+            );
+            assert!(
+                (extracted.pitch - pitch).abs() < 1e-5,
+                "pitch {pitch} recovered as {}",
+                extracted.pitch
+            );
+        }
+    }
+
+    /// A mount that rolls the muzzle about the barrel axis must not shift the extracted
+    /// angles: the diff base has to reflect where the barrel actually points, not how
+    /// it is rolled, so sender-side diffs reconstruct their intended absolute aim.
+    #[test]
+    fn from_muzzle_world_ignores_roll_about_the_aim_axis() {
+        let target = GimbalAimTarget {
+            yaw: 0.9,
+            pitch: -0.25,
+        };
+        let rolled = target.rotation() * Quat::from_rotation_y(0.6);
+
+        let recovered = GimbalAimTarget::from_muzzle_world(rolled);
+
+        assert!((wrap_angle(recovered.yaw - 0.9)).abs() < 1e-5);
+        assert!((recovered.pitch + 0.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shifted_by_deg_accumulates_and_wraps_yaw() {
+        let base = GimbalAimTarget {
+            yaw: 3.0,
+            pitch: 0.1,
+        };
+
+        let up = base.shifted_by_deg(30.0, 10.0);
+        assert!((wrap_angle(up.yaw - (3.0 + 30.0f32.to_radians()))).abs() < 1e-5);
+        assert!((up.pitch - (0.1 + 10.0f32.to_radians())).abs() < 1e-5);
+
+        let down = base.shifted_by_deg(-30.0, -10.0);
+        assert!(down.yaw.abs() < std::f32::consts::PI);
+        assert!((down.pitch - (0.1 - 10.0f32.to_radians())).abs() < 1e-5);
     }
 }
