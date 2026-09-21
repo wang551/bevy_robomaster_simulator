@@ -28,7 +28,7 @@ metalfx_temporal = true
 metalfx_frame_generation = false
 # Output/render resolution ratio used by MetalFX temporal upscaling. Clamped to 1.0..=3.0.
 metalfx_scale = 2.0
-illuminance = 500.0
+illuminance = 1000.0
 # Camera bloom: emissive surfaces (armor light bars) glow like overexposed LEDs on a real camera.
 bloom = true
 # Bloom strength; 0 disables the effect.
@@ -72,11 +72,16 @@ intensity_default = 1000.0
 #   ros2 run image_transport republish compressed in:=/image_raw raw out:=/image_raw
 publish_hz = 60.0          # max image publish rate in Hz; 0 = every frame (dangerous for remote subscribers)
 publish_compressed = false # true = publish /image_raw/compressed (JPEG) instead of /image_raw
+odom_hz = 30.0             # /odom (nav_msgs/Odometry) rate in Hz (read once at startup)
+imu_hz = 200.0             # /imu (sensor_msgs/Imu) rate cap in Hz (read once at startup)
+
 [scene]
 # Which battlefield map to load (read once at startup, not hot-reloadable).
 #   rmuc - full RMUC arena: ground + outposts + power rune + tech core
 #   rmul - simple RMUL field: only GROUND_RMUL.glb
 map = "rmul"
+# 对手机器人会追击并推挤玩家;导航/建图联调时设 false 拿到确定性场景。
+spawn_opponents = false
 
 [physics]
 fixed_hz = 120.0                # fixed physics ticks per second

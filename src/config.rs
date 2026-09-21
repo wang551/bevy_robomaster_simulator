@@ -371,6 +371,10 @@ pub struct RosPublishConfig {
     /// Reduces bandwidth to ~20-40MB/s, which remote/WiFi consumers can keep
     /// up with. Consumers must subscribe to /image_raw/compressed instead.
     pub publish_compressed: bool,
+    /// /odom (nav_msgs/Odometry) publish rate in Hz. Read once at startup.
+    pub odom_hz: f32,
+    /// /imu (sensor_msgs/Imu) publish rate cap in Hz. Read once at startup.
+    pub imu_hz: f32,
 }
 
 impl Default for RosPublishConfig {
@@ -378,6 +382,8 @@ impl Default for RosPublishConfig {
         Self {
             publish_hz: 60.0,
             publish_compressed: false,
+            odom_hz: 30.0,
+            imu_hz: 200.0,
         }
     }
 }
@@ -415,11 +421,17 @@ pub enum MapKind {
 pub struct SceneConfig {
     /// Which battlefield map to load. Read once at startup (not hot-reloadable).
     pub map: MapKind,
+    /// Spawn the opposing slapper bots (they chase and shove the player).
+    /// Disable for deterministic nav/mapping test runs.
+    pub spawn_opponents: bool,
 }
 
 impl Default for SceneConfig {
     fn default() -> Self {
-        Self { map: MapKind::Rmuc }
+        Self {
+            map: MapKind::Rmuc,
+            spawn_opponents: true,
+        }
     }
 }
 

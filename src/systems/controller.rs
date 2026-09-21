@@ -130,7 +130,7 @@ impl ControllerInput {
     }
 }
 
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug)]
 pub struct ControllerState {
     pub controlled: ControllerInput,
     pub remote: ControllerInput,
@@ -139,6 +139,22 @@ pub struct ControllerState {
     remote_chassis_spin: ChassisSpinMode,
     active_gamepad: Option<Entity>,
     help: ControllerHelp,
+}
+
+impl Default for ControllerState {
+    fn default() -> Self {
+        Self {
+            controlled: ControllerInput::default(),
+            remote: ControllerInput::default(),
+            // 默认开启自瞄订阅(F5 可切换):默认云台姿态朝天,导航/建图
+            // 需要程序通过 /rm_gimbal/cmd 控制云台才能让雷达看到场地。
+            keyboard_auto_aim: true,
+            controlled_chassis_spin: ChassisSpinMode::default(),
+            remote_chassis_spin: ChassisSpinMode::default(),
+            active_gamepad: None,
+            help: ControllerHelp::default(),
+        }
+    }
 }
 
 impl ControllerState {
@@ -535,6 +551,8 @@ mod tests {
         controller.use_help(ControllerHelp::xbox());
 
         assert_eq!(controller.help_source(), "xbox");
+        // keyboard_auto_aim 默认开启(导航/建图依赖 /rm_gimbal/cmd),F5 可切换
+        controller.keyboard_auto_aim = false;
         assert_eq!(controller.help_mode(), "manual");
         assert!(controller.help_controls().contains("hold RT"));
 

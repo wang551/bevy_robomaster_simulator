@@ -109,7 +109,7 @@ cargo run --no-default-features --features ros2 --release
 
 ```sh
 ros2 topic list
-# 应看到 /camera_info /image_raw /tf /gimbal_pose ... /rm_gimbal/cmd
+# 应看到 /camera_info /image_raw /tf /gimbal_pose /odom /imu /livox/lidar ... /rm_gimbal/cmd /cmd_vel
 
 ros2 topic hz /image_raw                      # 默认约等于 [ros2] publish_hz = 60
 ros2 topic echo /gimbal_pose --field pose     # 手动转动云台（方向键）观察变化
@@ -121,7 +121,7 @@ ros2 topic echo /gimbal_pose --field pose     # 手动转动云台（方向键�
 
 ## 3. 话题接口参考
 
-话题定义集中在 `src/ros2/topic.rs`（146–167 行），全部发布者使用 r2r 默认 QoS（**Reliable / KeepLast / depth 10 / Volatile**），除特别注明外。
+话题定义集中在 `src/ros2/topic.rs`（146–176 行），全部发布者使用 r2r 默认 QoS（**Reliable / KeepLast / depth 10 / Volatile**），除特别注明外。
 
 ### 3.1 仿真器发布
 
@@ -136,10 +136,12 @@ ros2 topic echo /gimbal_pose --field pose     # 手动转动云台（方向键�
 | `/muzzle_pose` | `geometry_msgs/PoseStamped` | 每渲染帧 | `muzzle_link` 相对父 frame `muzzle` |
 | `/camera_pose` | `geometry_msgs/PoseStamped` | 每渲染帧 | `camera_link` 相对父 frame `gimbal_link` |
 | `/livox/lidar` | `sensor_msgs/PointCloud2` | `[livox_ros] publish_freq`（默认 10Hz） | 由深度图模拟的 Livox 风格点云；`[livox_ros] enabled = true` 时才发布 |
+| `/odom` | `nav_msgs/Odometry` | `[ros2] odom_hz`（默认 30Hz） | `odom→base_link` 里程计：pose 与 `/tf` 对应边逐位一致（yaw-only），twist 为 base_link 机体系速度（x 前 y 左，angular.z 偏航角速度，与 `/cmd_vel` 执行侧同源） |
+| `/imu` | `sensor_msgs/Imu` | `[ros2] imu_hz`（默认 200Hz 上限） | base_link 机体系：angular_velocity / linear_acceleration 取自底盘运动学观测（**加速度含 +g 重力偏置**，符合加速度计约定），orientation 为底盘 rpy；FAST-LIO 类 LIO 可直接使用 |
 | `/simulator/marker` | `visualization_msgs/Marker` | 每渲染帧 | 每块装甲板一个 CUBE（ns `armors`，寿命 0.3s，frame `map`；当前 `alpha = 0.0`，RViz 默认渲染下不可见） |
 | `/simulator/tech_core/state` | `std_msgs/String` | 20Hz | 科技核心状态的 JSON（`{stamp, cores:[...]}`） |
 
-> 4 个 pose 话题是 `/tf` 对应变换的便捷别名：自 `5b2b777` 起，四元数与 `/tf` 中对应父子变换**逐位一致**，`header.frame_id` 为父 frame。用 TF2 listener 的可以只订阅 `/tf`。
+> pose 话题是 `/tf` 对应变换的便捷别名（`header.frame_id` 为父 frame；用 TF2 listener 的可以只订阅 `/tf`）。⚠️ TF 树标准化（`odom→base_link`、`map→odom` 交还 SLAM，见第 5 节）带来两处语义变化：`/odom_pose` 变为 **`base_link` 在 `odom` 下的真里程计位姿**；`/gimbal_pose` 改为独立发布云台**世界朝向 + 世界位置**（frame `odom`）——姿态四元数与重构前逐位一致，平移从恒 0 变为真实世界位置。
 
 ### 3.2 仿真器订阅
 
@@ -206,16 +208,20 @@ cx = width/2,  cy = height/2
 ### 5.2 TF 树（`/tf`，每渲染帧整树发布）
 
 ```
-map                                    # 世界/场地固定系
-├── odom                               # 平移 = 云台世界位置，旋转 = 单位（机器人世界位置）
-│   └── gimbal_link                    # 云台；X 轴沿枪管方向（含安装旋转与 90° 修正）
-│       ├── muzzle → muzzle_link       # 枪口（弹丸出发点）
-│       └── camera_link                # 相机外参（由 vehicle.glb 的 CAM_DIRECTION 节点换算）
-│           └── camera_optical_frame   # 标准光学系（z 前 x 右 y 下），PnP 用
+odom                                    # 里程计根（世界固定系，原点 = 世界原点，ROS 对齐）
+└── base_link                           # 底盘（标准导航命名；yaw-only 旋转，忽略底盘侧倾）
+    └── gimbal_link                     # 云台（相对底盘）；X 轴沿枪管方向（含安装旋转与 90° 修正）
+        ├── muzzle → muzzle_link        # 枪口（弹丸出发点）
+        └── camera_link                 # 相机外参（由 vehicle.glb 的 CAM_DIRECTION 节点换算）
+            └── camera_optical_frame    # 标准光学系（z 前 x 右 y 下），PnP 用
+
+map                                     # 世界/场地固定系（调试帧，父为 map；与 SLAM 的 map 系在 drift 范围内一致）
 ├── power_rune_small / power_rune_large            # 每面能量机关的基座
 │   └── power_rune_{small|large}_{0..4}            # 当前激活的扇叶（仅激活期间存在）
-└── armor_0 … armor_N                  # 所有装甲板（世界系位姿，随机器人运动实时更新）
+└── armor_0 … armor_N                   # 所有装甲板（世界系位姿，随机器人运动实时更新）
 ```
+
+> ⚠️ `map→odom` **不由仿真器发布**（REP-105：该边归 SLAM/AMCL 所有，如 RTAB-Map、slam_toolbox）。仿真器只保证 `odom` 是世界固定系——SLAM 启动前 `odom→base_link→…` 链完整可用；要查 `map` 系下的 TF（如 RViz 可视化装甲板）需先启动 SLAM。相机/云台在**世界系**的位姿也可以直接订阅 `/gimbal_pose`、`/camera_pose` 话题，不依赖 `map→odom`。
 
 ### 5.3 `armor_N` 命名的重要坑位
 
@@ -301,6 +307,8 @@ pitch_diff = 目标仰角 − 当前仰角               # 正 = 抬头
 | 与 F5 的关系 | 完全独立，可同时运行（导航 + 自瞄）；`/cmd_vel` 不受 F5 门控 |
 | QoS | 订阅端 BestEffort（`sensor_data()`），按 DDS 匹配规则（发布端可靠性 ≥ 订阅端请求即可），Reliable 或 BestEffort 发布端都能匹配——Nav2 velocity smoother、`ros2 topic pub`（默认 Reliable）、teleop 均可直接使用 |
 | 联调日志 | 2Hz 打印 `[ROS2] cmd_vel linear=(x, y) angular.z=..` |
+
+闭环输入侧（`/odom`、`/imu`、`odom→base_link` TF）同样已就绪，配合 3D SLAM（`/livox/lidar` 点云）即可形成完整 Nav2 导航闭环。
 
 ---
 
@@ -782,10 +790,12 @@ Fixed Frame 设为 **`map`**：
 
 | 内容 | 位置 |
 |---|---|
-| 话题名称/类型/QoS 总表 | `src/ros2/topic.rs:146-169` |
-| TF 树构建 + pose 话题 | `src/ros2/plugin.rs:126-294` |
-| GimbalCmd 消费逻辑（角度差 → PID 目标） | `src/ros2/plugin.rs:299-367` |
-| `/cmd_vel` 消费逻辑（写入 NavCmdVel） | `src/ros2/plugin.rs:369-392` |
+| 话题名称/类型/QoS 总表 | `src/ros2/topic.rs:146-176` |
+| TF 树构建 + pose 话题 | `src/ros2/plugin.rs:126-393`（`tf_tree!` 宏 + `capture_rune`） |
+| `/odom` 里程计发布（pose/twist/协方差） | `src/ros2/plugin.rs:491-567` |
+| `/imu` 发布（重力偏置/协方差） | `src/ros2/plugin.rs:569-614` |
+| GimbalCmd 消费逻辑（角度差 → PID 目标） | `src/ros2/plugin.rs:395-463` |
+| `/cmd_vel` 消费逻辑（写入 NavCmdVel） | `src/ros2/plugin.rs:465-489` |
 | `/cmd_vel` 底盘执行（速度伺服 + 接管仲裁） | `src/systems/input.rs:60-148`（`vehicle_controls` 导航分支） |
 | NavCmdVel 资源（新鲜度/刹停状态机） | `src/components/infantry.rs:48-100` |
 | 增量基准提取 + 角度差应用（`from_muzzle_world` / `shifted_by_deg`） | `src/systems/gimbal_pid.rs:14-40` |

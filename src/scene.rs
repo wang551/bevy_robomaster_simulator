@@ -265,6 +265,15 @@ async fn spawn_robots(w: &AsyncWorld, scene: &(impl Fn(&'static str) -> WorldAss
         .await;
     w.run(setup_vehicle, player).await;
 
+    // Opponents chase and shove the player; `[scene] spawn_opponents = false`
+    // drops them for deterministic nav/mapping test runs.
+    let spawn_opponents = w
+        .with_world(|world| world.resource::<SimulationConfig>().scene.spawn_opponents)
+        .await;
+    if !spawn_opponents {
+        return;
+    }
+
     let slapper = w
         .spawn(
             scene("vehicle.glb"),

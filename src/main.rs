@@ -152,7 +152,9 @@ fn main() {
         .insert_resource(Gravity(Vec3::NEG_Y * 9.81))
         .insert_resource(SubstepCount(config.physics.substep_count))
         .insert_resource(fixed_time_from_config(&config))
-        .insert_resource(SubscribeAutoAim(AtomicBool::new(false)))
+        // SubscribeAutoAim 的初值由 ControllerState::default 的
+        // keyboard_auto_aim 决定(update_auto_aim_subscription 每帧覆写)。
+        .insert_resource(SubscribeAutoAim(AtomicBool::new(true)))
         .init_resource::<NavCmdVel>()
         .insert_resource(ProjectileCooldown(Timer::from_seconds(
             config.projectile.cooldown,

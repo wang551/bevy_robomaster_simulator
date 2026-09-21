@@ -5,8 +5,9 @@ use bevy::tasks::futures_lite::future::block_on;
 use futures::channel::mpsc;
 use futures::channel::mpsc::{Sender, TryRecvError};
 use r2r::geometry_msgs::msg::{PoseStamped, Twist};
+use r2r::nav_msgs::msg::Odometry;
 use r2r::rm_interfaces::msg::GimbalCmd;
-use r2r::sensor_msgs::msg::{CameraInfo, CompressedImage, Image, PointCloud2};
+use r2r::sensor_msgs::msg::{CameraInfo, CompressedImage, Image, Imu, PointCloud2};
 use r2r::std_msgs::msg::String as RosString;
 use r2r::tf2_msgs::msg::TFMessage;
 use r2r::visualization_msgs::msg::Marker;
@@ -80,7 +81,12 @@ fn publisher<T: RosTopic>(node: &mut Node, signal: Arc<AtomicBool>) -> TopicPubl
             while !signal.load(std::sync::atomic::Ordering::Acquire) {
                 match receiver.next().await {
                     Some(m) => {
-                        let _ = publisher.publish(&m);
+                        if let Err(e) = publisher.publish(&m) {
+                            eprintln!(
+                                "[ROS2] publish failed on {}: {e}",
+                                std::any::type_name::<T>()
+                            );
+                        }
                     }
                     None => break,
                 }
@@ -160,6 +166,8 @@ topic!(
         "/muzzle_pose" as PoseStamped as MuzzlePoseTopic;
         "/camera_pose" as PoseStamped as CameraPoseTopic;
         "/simulator/tech_core/state" as RosString as TechCoreStateTopic;
+        "/odom" as Odometry as OdomTopic;
+        "/imu" as Imu as ImuTopic;
     }
     sub {
         "/rm_gimbal/cmd" as GimbalCmd as GimbalCmdTopic with QosProfile::sensor_data();

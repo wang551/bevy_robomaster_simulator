@@ -53,7 +53,7 @@ if ($Mode -eq "ros2") {
     $env:ROS_DISTRO = "lyrical"   # 必须是 lyrical：r2r 0.9.6 的 ManualByNode 门控为 not(lyrical)
     $env:AMENT_PREFIX_PATH = "$RosEnv;$Overlay"
     $env:CMAKE_PREFIX_PATH = "$RosEnv;$Overlay"
-    $env:IDL_PACKAGE_FILTER = "rm_interfaces;builtin_interfaces;geometry_msgs;sensor_msgs;std_msgs;visualization_msgs;tf2_msgs"
+    $env:IDL_PACKAGE_FILTER = "rm_interfaces;builtin_interfaces;geometry_msgs;sensor_msgs;std_msgs;visualization_msgs;tf2_msgs;nav_msgs"
     $env:LIBCLANG_PATH = Join-Path $env:ProgramFiles "LLVM\bin"
     if (-not (Test-Path $env:LIBCLANG_PATH)) { Write-Warning "未找到 LLVM（$env:LIBCLANG_PATH）：增量编译 r2r 时会失败，重装请 winget install LLVM.LLVM" }
     # 注意顺序：rustup 与 MSVC 必须仍在最前（pixi 的 Library\bin 里有 rust 1.93 和其他遮蔽物），

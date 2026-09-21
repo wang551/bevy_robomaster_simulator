@@ -150,7 +150,7 @@ source install/setup.bash        # 叠加 overlay，让 r2r 能发现 Armor/Gimb
 ```sh
 source /opt/ros/<distro>/setup.bash        # 运行期也需要：r2r 加载 librcl 等共享库依赖它注入 LD_LIBRARY_PATH
 source install/setup.bash
-export IDL_PACKAGE_FILTER=rm_interfaces;builtin_interfaces;geometry_msgs;sensor_msgs;std_msgs;visualization_msgs;tf2_msgs
+export IDL_PACKAGE_FILTER=rm_interfaces;nav_msgs;builtin_interfaces;geometry_msgs;sensor_msgs;std_msgs;visualization_msgs;tf2_msgs
 
 cargo run --no-default-features --features ros2 --release
 ```

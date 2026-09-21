@@ -1,7 +1,7 @@
 use avian3d::prelude::{AngularVelocity, LinearVelocity};
 use bevy::prelude::*;
 
-use crate::components::{Controlled, Infantry};
+use crate::components::{Controlled, Infantry, InfantryChassis};
 use crate::config::{MecanumConfig, SimulationConfig};
 
 const NUM_WHEELS: usize = 4;
@@ -54,20 +54,26 @@ pub fn update_chassis_observation(
     config: Res<SimulationConfig>,
     mut frame: ResMut<ChassisObservationFrame>,
     mut previous: ResMut<PreviousKinematicState>,
-    chassis: Query<
+    root: Query<
         (&GlobalTransform, &LinearVelocity, &AngularVelocity),
         (With<Infantry>, With<Controlled>),
     >,
+    base: Single<(&GlobalTransform, &InfantryChassis), (With<InfantryChassis>, With<Controlled>)>,
 ) {
-    let Ok((chassis_tf, linear_velocity, angular_velocity)) = chassis.single() else {
+    let Ok((root_tf, linear_velocity, angular_velocity)) = root.single() else {
         *frame = ChassisObservationFrame::default();
         *previous = PreviousKinematicState::default();
         return;
     };
+    let (base_tf, chassis_data) = base.into_inner();
 
     let stamp_s = time.elapsed_secs_f64();
     let dt_s = time.delta_secs();
-    let rotation = chassis_tf.compute_transform().rotation;
+    // The chassis orientation is the physics root's spin composed with the
+    // kinematic BASE yaw — the same rotation the render hierarchy (and the
+    // depth camera) uses. Reading the root alone would miss the commanded
+    // spin; reading the kinematic yaw alone would miss collision-induced spin.
+    let rotation = base_tf.rotation();
 
     // Convert from world velocity to chassis-local velocity, then remap Bevy axes
     // (right, up, back) to body axes (forward, left, up).
@@ -75,7 +81,12 @@ pub fn update_chassis_observation(
     let linear_body = bevy_local_to_body(linear_local_bevy);
     let v_body = Vec2::new(linear_body.x, linear_body.y);
 
-    let angular_local_bevy = rotation.inverse() * angular_velocity.0;
+    let world_angular = chassis_world_angular_velocity(
+        root_tf.rotation(),
+        angular_velocity.0,
+        chassis_data.yaw_velocity,
+    );
+    let angular_local_bevy = rotation.inverse() * world_angular;
     let gyro_body = bevy_local_to_body(angular_local_bevy);
     let wz_radps = gyro_body.z;
 
@@ -142,8 +153,23 @@ fn wheel_linear_to_angular(
     wheel_linear_mps.map(|wheel_linear| wheel_linear / radius)
 }
 
-fn bevy_local_to_body(vector: Vec3) -> Vec3 {
+/// Maps a Bevy local vector (x right, y up, z back) to ROS body axes
+/// (x forward, y left, z up) per REP-103. Shared with the ROS2 odometry
+/// publisher.
+pub(crate) fn bevy_local_to_body(vector: Vec3) -> Vec3 {
     Vec3::new(-vector.z, -vector.x, vector.y)
+}
+
+/// True chassis angular velocity in the world frame: the physics root's spin
+/// plus the kinematic yaw rate about the root's local up axis (the axis the
+/// BASE yaw rotates around in the YXZ euler chain). Shared with the ROS2
+/// odometry publisher.
+pub(crate) fn chassis_world_angular_velocity(
+    root_rotation: Quat,
+    root_angular: Vec3,
+    yaw_velocity: f32,
+) -> Vec3 {
+    root_angular + root_rotation * (Vec3::Y * yaw_velocity)
 }
 
 fn bevy_to_body_quat(rotation: Quat) -> Quat {
@@ -234,5 +260,31 @@ mod tests {
         approx_eq(accel.x, 0.0);
         approx_eq(accel.y, 0.0);
         approx_eq(alpha, 0.0);
+    }
+
+    #[test]
+    fn body_axes_map_from_bevy_world_axes() {
+        // Bevy: x right, y up, z back. ROS body: x forward, y left, z up.
+        assert_eq!(bevy_local_to_body(Vec3::NEG_Z), Vec3::X);
+        assert_eq!(bevy_local_to_body(Vec3::NEG_X), Vec3::Y);
+        assert_eq!(bevy_local_to_body(Vec3::X), Vec3::NEG_Y);
+        assert_eq!(bevy_local_to_body(Vec3::Y), Vec3::Z);
+    }
+
+    #[test]
+    fn world_angular_velocity_composes_root_spin_and_kinematic_yaw() {
+        // Upright root: both rates act about the same world up axis.
+        let world = chassis_world_angular_velocity(Quat::IDENTITY, Vec3::new(0.0, 0.5, 0.0), 2.0);
+        approx_eq(world.y, 2.5);
+        approx_eq(world.x, 0.0);
+        approx_eq(world.z, 0.0);
+
+        // The kinematic yaw rotates around the root's local up: a root pitched
+        // 90° about x turns that axis into the world z direction.
+        let root = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        let world = chassis_world_angular_velocity(root, Vec3::ZERO, 2.0);
+        approx_eq(world.z, 2.0);
+        approx_eq(world.y, 0.0);
+        approx_eq(world.x, 0.0);
     }
 }

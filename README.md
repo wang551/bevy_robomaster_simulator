@@ -93,8 +93,11 @@
 
 * `/camera_info`
 * `/image_raw` 或 `/image_raw/compressed`（二选一，由 `config.toml` 的 `[ros2] publish_compressed` 决定；后者为 JPEG 的 `sensor_msgs/CompressedImage`，遵循 image_transport 命名约定）
-* `/tf`
-* `/gimbal_pose`、`/odom_pose`、`/muzzle_pose`、`/camera_pose`（位姿话题：该 frame 相对**父 frame** 的位姿，`header.frame_id` 为父 frame；如 `/gimbal_pose` 是 `gimbal_link` 在 `odom` 下的位姿，姿态四元数与 `/tf` 中 `odom→gimbal_link` 的旋转逐位一致）
+* `/livox/lidar`（`sensor_msgs/PointCloud2`，由 `[livox_ros]` 控制）
+* `/tf`（TF 树：`odom→base_link→gimbal_link→{muzzle, camera_link→camera_optical_frame}`；`map→odom` 由 SLAM/AMCL 发布，仿真器不占用）
+* `/odom`（`nav_msgs/Odometry`，默认 30Hz）— `odom→base_link` 里程计：位姿与 `/tf` 对应边逐位一致，twist 为 base_link 机体系速度（x 前 y 左，angular.z 偏航角速度）
+* `/imu`（`sensor_msgs/Imu`，默认 200Hz 上限）— base_link 机体系角速度/加速度（加速度含 +g 重力偏置，符合加速度计约定），数据源为底盘运动学观测
+* `/gimbal_pose`、`/odom_pose`、`/muzzle_pose`、`/camera_pose`（位姿话题：该 frame 相对**父 frame** 的位姿，`header.frame_id` 为父 frame；`/odom_pose` = `base_link` 在 `odom` 下的位姿；`/gimbal_pose` = 云台世界朝向与位置，frame `odom`，姿态四元数与重构前逐位一致）
 
 > **局域网订阅注意**：1440×1080 原始图像一帧约 4.7MB，全速发布可达 ~500MB/s。订阅方在局域网/WiFi 等较慢链路时请设置 `publish_compressed = true` 并订阅 `/image_raw/compressed`（JPEG，约 20-40MB/s）；消费速度跟不上时 DDS 会在仿真器进程内无界堆积未发送数据，导致内存耗尽崩溃（`memory allocation failed` / 0xc0000409）。`[ros2] publish_hz` 可进一步限制发布帧率。只认原始图像的工具（如 rqt_image_view）可在消费端转回 raw：`ros2 run image_transport republish compressed in:=/image_raw raw out:=/image_raw`。
 
